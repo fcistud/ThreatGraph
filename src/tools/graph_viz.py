@@ -1,17 +1,20 @@
-"""Attack path graph visualization — MATRIX EDITION.
+"""Attack path graph visualization — MATRIX ENTERPRISE EDITION.
 
-Generates a deeply immersive, Matrix-inspired interactive HTML graph:
-- Raining green code particles on black background
-- Neon green/cyan/red node coloring with glow effects
-- Animated pulse edges showing attack flow direction
-- HUD-style overlays with scanline effects
-- Internet-facing exposure indicators (🌐 vs 🔒)
+Full enterprise network topology visualization:
+- Network zone rings (Internet → DMZ → Internal → Corporate → Air-gap)
+- Asset nodes with crown jewel markers (👑)
+- Security control shields (🛡️)
+- Threat vector skulls (💀)
+- Asset-to-asset connectivity
+- Attack path tracing (periphery → crown jewel)
+- Matrix code rain + neon glow effects
 """
 
 import json
 import os
 import sys
 import tempfile
+from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -23,60 +26,24 @@ from src.tools.surreal_tools import surreal_query
 
 # ─── MATRIX THEME ─────────────────────────────────────
 
-COLORS = {
-    "asset_critical": "#FF3333",
-    "asset_high": "#FF6B00",
-    "asset_medium": "#FFB800",
-    "asset_low": "#00FF41",
-    "software": "#00FFFF",
-    "cve_critical": "#FF3333",
-    "cve_high": "#FF6B00",
-    "cve_medium": "#FFB800",
-    "cve_low": "#00FF41",
-    "cve_kev": "#FF0055",
-    "technique": "#0080FF",
-    "tactic": "#00FFFF",
-    "threat_group": "#FF00FF",
-    "mitigation": "#00FF41",
-    "internet_facing": "#FF3333",
-    "internal": "#00FF41",
+ZONE_COLORS = {
+    "internet": "#FF0055",
+    "dmz": "#FF6B00",
+    "internal": "#FFB800",
+    "corporate": "#00FFFF",
+    "airgap": "#00FF41",
 }
 
-SHAPES = {
-    "asset": "box",
-    "software": "diamond",
-    "cve": "triangle",
-    "technique": "dot",
-    "threat_group": "star",
-    "tactic": "square",
+ZONE_ORDER = {"internet": 0, "dmz": 1, "internal": 2, "corporate": 3, "airgap": 4}
+
+CRITICALITY_COLORS = {
+    "critical": "#FF3333",
+    "high": "#FF6B00",
+    "medium": "#FFB800",
+    "low": "#00FF41",
 }
 
 FONT = {"color": "#00FF41", "face": "Share Tech Mono, Fira Code, monospace"}
-
-
-def _cve_color(cvss, is_kev=False):
-    if is_kev:
-        return COLORS["cve_kev"]
-    if cvss is None:
-        return COLORS["cve_medium"]
-    if cvss >= 9.0:
-        return COLORS["cve_critical"]
-    if cvss >= 7.0:
-        return COLORS["cve_high"]
-    if cvss >= 4.0:
-        return COLORS["cve_medium"]
-    return COLORS["cve_low"]
-
-
-def _cve_size(cvss):
-    base = 15
-    if cvss is None:
-        return base + 5
-    return base + cvss * 3
-
-
-def _asset_color(crit):
-    return COLORS.get(f"asset_{crit}", COLORS["asset_medium"])
 
 
 def _flatten(val):
@@ -92,290 +59,405 @@ def _flatten(val):
     return out
 
 
+def _cve_color(cvss, is_kev=False):
+    if is_kev:
+        return "#FF0055"
+    if cvss is None:
+        return "#FFB800"
+    if cvss >= 9.0:
+        return "#FF3333"
+    if cvss >= 7.0:
+        return "#FF6B00"
+    if cvss >= 4.0:
+        return "#FFB800"
+    return "#00FF41"
+
+
+def _cve_size(cvss):
+    return 15 + (cvss or 5) * 2.5
+
+
+def _risk_score(cvss, criticality_score, zone, control_effectiveness=0):
+    """Composite risk: CVSS × criticality × exposure × (1 - control)."""
+    cvss_val = cvss or 5.0
+    crit_val = criticality_score or 5.0
+    exposure_map = {"internet": 1.0, "dmz": 0.8, "corporate": 0.4, "internal": 0.3, "airgap": 0.05}
+    exposure = exposure_map.get(zone, 0.5)
+    control_reduction = 1.0 - min(control_effectiveness, 0.95)
+    raw = (cvss_val / 10) * (crit_val / 10) * exposure * control_reduction
+    return round(raw * 100, 1)  # 0-100 scale
+
+
 # ─── GRAPH BUILDERS ───────────────────────────────────
 
-def build_attack_graph(db, hostname=None) -> nx.DiGraph:
-    """Build the asset → software → CVE attack path graph."""
+def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=True) -> nx.DiGraph:
+    """Build the full enterprise network topology graph."""
     G = nx.DiGraph()
 
+    # ─── 1. ASSETS ────────────────────────────────────
     if hostname:
-        query = """
-            SELECT hostname, criticality, os, network_zone, ip_address, owner,
+        assets = surreal_query(db, """
+            SELECT hostname, criticality, criticality_score, os, network_zone, ip_address,
+                owner, business_function, is_crown_jewel, open_ports, services,
                 ->runs->software_version.name AS sw_names,
                 ->runs->software_version.version AS sw_versions,
-                ->runs->software_version.cpe AS sw_cpes,
                 ->runs->software_version->has_cve->cve.cve_id AS cve_ids,
                 ->runs->software_version->has_cve->cve.cvss_score AS cvss_scores,
                 ->runs->software_version->has_cve->cve.is_kev AS kev_flags,
                 ->runs->software_version->has_cve->cve.description AS cve_descs
             FROM asset WHERE hostname = $h;
-        """
-        assets = surreal_query(db, query, {"h": hostname})
+        """, {"h": hostname})
     else:
-        query = """
-            SELECT hostname, criticality, os, network_zone, ip_address, owner,
+        assets = surreal_query(db, """
+            SELECT hostname, criticality, criticality_score, os, network_zone, ip_address,
+                owner, business_function, is_crown_jewel, open_ports, services,
                 ->runs->software_version.name AS sw_names,
                 ->runs->software_version.version AS sw_versions,
-                ->runs->software_version.cpe AS sw_cpes,
                 ->runs->software_version->has_cve->cve.cve_id AS cve_ids,
                 ->runs->software_version->has_cve->cve.cvss_score AS cvss_scores,
                 ->runs->software_version->has_cve->cve.is_kev AS kev_flags,
                 ->runs->software_version->has_cve->cve.description AS cve_descs
             FROM asset;
-        """
-        assets = surreal_query(db, query)
+        """)
 
     for a in assets:
         h = a.get("hostname", "?")
         crit = a.get("criticality", "medium")
+        crit_score = a.get("criticality_score", 5.0) or 5.0
         os_name = a.get("os", "")
         zone = a.get("network_zone", "")
         ip = a.get("ip_address", "")
+        is_crown = a.get("is_crown_jewel", False)
+        biz = a.get("business_function", "")
+        ports = a.get("open_ports", []) or []
+        services = a.get("services", []) or []
 
         sw_names = _flatten(a.get("sw_names", []))
-        sw_versions = _flatten(a.get("sw_versions", []))
         cve_ids = _flatten(a.get("cve_ids", []))
         cvss_scores = _flatten(a.get("cvss_scores", []))
         kev_flags = _flatten(a.get("kev_flags", []))
-        cve_descs = _flatten(a.get("cve_descs", []))
 
         total_cves = len(cve_ids)
         kev_count = sum(1 for k in kev_flags if k)
         max_cvss = max((s for s in cvss_scores if isinstance(s, (int, float))), default=0)
 
-        # Determine internet exposure based on network zone
-        is_internet_facing = zone.lower() in ("dmz", "public", "external", "internet")
-        exposure_icon = "🌐 INTERNET-FACING" if is_internet_facing else "🔒 INTERNAL"
-        exposure_color = COLORS["internet_facing"] if is_internet_facing else COLORS["internal"]
+        is_internet_facing = zone in ("dmz", "internet")
+        zone_color = ZONE_COLORS.get(zone, "#888888")
+        node_color = CRITICALITY_COLORS.get(crit, "#FFB800")
+        crown_marker = " 👑" if is_crown else ""
+        exposure_icon = "🌐" if is_internet_facing else ("🔒" if zone == "airgap" else "🏢")
 
-        # Asset node
-        asset_node = f"asset:{h}"
-        node_color = _asset_color(crit)
+        asset_node = f"asset:{h.replace('-', '_')}"
         G.add_node(asset_node,
-            label=f"{'🌐' if is_internet_facing else '🔒'} {h}",
+            label=f"{exposure_icon} {h}{crown_marker}",
             group="asset",
-            shape=SHAPES["asset"],
-            color={"background": node_color, "border": node_color,
-                   "highlight": {"background": "#FFFFFF", "border": node_color}},
-            size=45,
-            font={**FONT, "size": 14, "bold": True, "color": "#FFFFFF"},
-            title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:320px;background:#0A0A0F;border:1px solid {node_color};padding:12px;'>
-                <div style='color:{node_color};font-size:16px;text-shadow:0 0 10px {node_color};letter-spacing:2px;'>{h}</div>
-                <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,{node_color},transparent);'></div>
-                <div style='color:#00FF41;font-size:11px;'>
-                    <span style='color:{exposure_color};text-shadow:0 0 5px {exposure_color};'>{exposure_icon}</span><br/>
+            shape="box",
+            color={"background": "#0A0A0F" if not is_crown else "#1a0a00",
+                   "border": "#FFD700" if is_crown else node_color,
+                   "highlight": {"background": "#1a1a2e", "border": "#FFFFFF"}},
+            size=50 if is_crown else 40,
+            font={**FONT, "size": 12, "bold": True,
+                  "color": "#FFD700" if is_crown else "#FFFFFF"},
+            title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:350px;background:#0A0A0F;
+                border:1px solid {"#FFD700" if is_crown else zone_color};padding:14px;'>
+                <div style='color:{"#FFD700" if is_crown else zone_color};font-size:16px;
+                    text-shadow:0 0 15px {"#FFD700" if is_crown else zone_color};letter-spacing:2px;'>
+                    {exposure_icon} {h}{"  👑 CROWN JEWEL" if is_crown else ""}
+                </div>
+                <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,{zone_color},transparent);'></div>
+                <div style='color:#7FB87F;font-size:11px;line-height:1.8;'>
+                    ZONE: <span style='color:{zone_color};text-shadow:0 0 5px {zone_color};'>{zone.upper()}</span><br/>
                     OS: <span style='color:#00FFFF;'>{os_name}</span><br/>
                     IP: <span style='color:#00FFFF;'>{ip}</span><br/>
-                    ZONE: <span style='color:#00FFFF;'>{zone}</span><br/>
-                    CRITICALITY: <span style='color:{node_color};text-shadow:0 0 5px {node_color};'>{crit.upper()}</span><br/>
-                    OWNER: <span style='color:#7FB87F;'>{a.get('owner', 'N/A')}</span>
+                    CRITICALITY: <span style='color:{node_color};font-size:14px;
+                        text-shadow:0 0 8px {node_color};'>{crit.upper()} ({crit_score}/10)</span><br/>
+                    FUNCTION: <span style='color:#FFB800;'>{biz.upper() if biz else 'N/A'}</span><br/>
+                    OWNER: <span style='color:#7FB87F;'>{a.get('owner', 'N/A')}</span><br/>
+                    PORTS: <span style='color:#00FFFF;'>{', '.join(str(p) for p in ports[:8])}</span><br/>
+                    SERVICES: <span style='color:#00FFFF;'>{', '.join(services[:5])}</span>
                 </div>
                 <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,rgba(0,255,65,0.3),transparent);'></div>
                 <div style='color:#FFB800;font-size:11px;'>
-                    SOFTWARE: {len(sw_names)} | CVEs: <span style='color:#FF3333;'>{total_cves}</span> | 
-                    KEV: <span style='color:#FF0055;text-shadow:0 0 8px #FF0055;'>{kev_count}</span><br/>
+                    SOFTWARE: {len(sw_names)} | CVEs: <span style='color:#FF3333;'>{total_cves}</span> |
+                    KEV: <span style='color:#FF0055;text-shadow:0 0 8px #FF0055;'>{kev_count}</span> |
                     MAX CVSS: <span style='color:{"#FF3333" if max_cvss >= 9 else "#FF6B00" if max_cvss >= 7 else "#FFB800"};
-                        text-shadow:0 0 8px {"#FF3333" if max_cvss >= 9 else "#FF6B00"};font-size:14px;'>{max_cvss}</span>
+                        font-size:14px;'>{max_cvss}</span>
                 </div>
             </div>""",
-            borderWidth=4 if is_internet_facing else 2,
+            borderWidth=4 if is_crown else 2,
             borderWidthSelected=6,
-            shadow={"enabled": True, "color": node_color, "size": 15 if is_internet_facing else 8},
+            shadow={"enabled": True, "color": "#FFD700" if is_crown else zone_color,
+                    "size": 20 if is_crown else 10},
+            zone=zone,
+            is_crown_jewel=is_crown,
+            criticality_score=crit_score,
             is_internet_facing=is_internet_facing,
         )
 
-        # Software nodes + edges
+        # Software + CVE nodes (compact — only add CVEs, link SW implicitly)
+        sw_versions = _flatten(a.get("sw_versions", []))
         for sw_name, sw_ver in zip(sw_names, sw_versions):
             sw_node = f"sw:{sw_name}:{sw_ver}"
             if sw_node not in G.nodes:
                 G.add_node(sw_node,
                     label=f"📦 {sw_name}\nv{sw_ver}",
                     group="software",
-                    shape=SHAPES["software"],
-                    color={"background": COLORS["software"], "border": COLORS["software"]},
-                    size=22,
-                    font={**FONT, "size": 10, "color": "#00FFFF"},
-                    title=f"""<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;
-                        border:1px solid #00FFFF;padding:10px;'>
-                        <div style='color:#00FFFF;text-shadow:0 0 10px #00FFFF;'>📦 {sw_name}</div>
-                        <div style='color:#7FB87F;font-size:11px;'>VERSION: {sw_ver}</div>
-                    </div>""",
-                    shadow={"enabled": True, "color": "#00FFFF", "size": 5},
+                    shape="diamond",
+                    color={"background": "#00FFFF", "border": "#00FFFF"},
+                    size=18,
+                    font={**FONT, "size": 9, "color": "#00FFFF"},
+                    title=f"<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid #00FFFF;padding:8px;'><div style='color:#00FFFF;text-shadow:0 0 10px #00FFFF;'>📦 {sw_name} v{sw_ver}</div></div>",
+                    shadow={"enabled": True, "color": "#00FFFF", "size": 4},
                 )
             G.add_edge(asset_node, sw_node,
-                color={"color": "rgba(0,255,65,0.4)", "highlight": "#00FF41"},
-                width=2, arrows="to", title="RUNS",
-                smooth={"type": "curvedCW", "roundness": 0.1})
+                color={"color": "rgba(0,255,255,0.25)", "highlight": "#00FFFF"},
+                width=1, arrows="to", title="RUNS",
+                smooth={"type": "curvedCW", "roundness": 0.08})
 
-        # CVE nodes
-        for sw_name, sw_ver in zip(sw_names, sw_versions):
-            sw_node = f"sw:{sw_name}:{sw_ver}"
+            # CVEs for this SW
             safe_sw = f"{sw_name}_{sw_ver}".replace(" ", "_").replace(".", "_").replace("-", "_")[:50]
             sw_cves = surreal_query(db, f"""
                 SELECT ->has_cve->cve.cve_id AS ids,
                        ->has_cve->cve.cvss_score AS scores,
-                       ->has_cve->cve.is_kev AS kevs,
-                       ->has_cve->cve.description AS descs
+                       ->has_cve->cve.is_kev AS kevs
                 FROM software_version:⟨{safe_sw}⟩;
             """)
-
             if not sw_cves:
                 continue
-
             sw_cve_data = sw_cves[0] if sw_cves else {}
             ids = _flatten(sw_cve_data.get("ids", []))
             scores = _flatten(sw_cve_data.get("scores", []))
             kevs = _flatten(sw_cve_data.get("kevs", []))
-            descs = _flatten(sw_cve_data.get("descs", []))
 
-            for i, cve_id in enumerate(ids):
-                if not cve_id:
+            for i, cid in enumerate(ids):
+                if not cid:
                     continue
                 cvss = scores[i] if i < len(scores) else None
                 is_kev = kevs[i] if i < len(kevs) else False
-                desc = (descs[i] if i < len(descs) else "") or ""
-                desc = str(desc)[:200]
-
-                cve_node = f"cve:{cve_id}"
                 color = _cve_color(cvss, is_kev)
+                cve_node = f"cve:{cid}"
                 if cve_node not in G.nodes:
-                    kev_marker = "⚠️ ACTIVELY EXPLOITED" if is_kev else ""
                     cvss_label = f"{cvss}" if isinstance(cvss, (int, float)) else "N/A"
-                    sev = "CRITICAL" if cvss and cvss >= 9 else "HIGH" if cvss and cvss >= 7 else "MEDIUM" if cvss and cvss >= 4 else "LOW"
-
                     G.add_node(cve_node,
-                        label=f"🔓 {cve_id}\n{cvss_label}",
+                        label=f"🔓 {cid}\n{cvss_label}",
                         group="cve",
-                        shape=SHAPES["cve"],
+                        shape="triangle",
                         color={"background": color, "border": color},
                         size=_cve_size(cvss),
-                        font={**FONT, "size": 9, "color": color},
-                        title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:350px;background:#0A0A0F;
-                            border:1px solid {color};padding:12px;'>
-                            <div style='color:{color};font-size:14px;text-shadow:0 0 15px {color};'>🔓 {cve_id}</div>
-                            <div style='margin:4px 0;'>
-                                <span style='background:{"rgba(255,0,85,0.2)" if is_kev else "rgba(0,255,65,0.1)"};
-                                    color:{color};border:1px solid {color};padding:2px 8px;font-size:11px;
-                                    text-shadow:0 0 5px {color};'>
-                                    CVSS {cvss_label} — {sev} {kev_marker}
-                                </span>
-                            </div>
-                            <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,{color},transparent);'></div>
-                            <div style='color:#7FB87F;font-size:10px;line-height:1.5;'>{desc}</div>
-                            <div style='margin-top:6px;'>
-                                <a href='https://nvd.nist.gov/vuln/detail/{cve_id}' target='_blank'
-                                    style='color:#00FFFF;font-size:10px;text-shadow:0 0 5px #00FFFF;'>NVD →</a>
-                            </div>
-                        </div>""",
-                        borderWidth=4 if is_kev else 2,
-                        shadow={"enabled": True, "color": color, "size": 12 if is_kev else 5},
+                        font={**FONT, "size": 8, "color": color},
+                        title=f"<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid {color};padding:8px;'><div style='color:{color};text-shadow:0 0 10px {color};'>🔓 {cid} — CVSS {cvss_label}{'  ⚠️ KEV' if is_kev else ''}</div></div>",
+                        shadow={"enabled": True, "color": color, "size": 8 if is_kev else 4},
+                        borderWidth=3 if is_kev else 1,
                     )
-
-                edge_color = "#FF0055" if is_kev else ("#FF3333" if cvss and cvss >= 9 else "#FF6B00" if cvss and cvss >= 7 else "rgba(0,255,65,0.3)")
+                edge_c = "#FF0055" if is_kev else ("#FF3333" if cvss and cvss >= 9 else "rgba(255,107,0,0.4)")
                 G.add_edge(sw_node, cve_node,
-                    color={"color": edge_color, "highlight": "#FFFFFF"},
-                    width=4 if is_kev else (3 if cvss and cvss >= 7 else 1),
-                    arrows="to",
-                    title=f"CVE — CVSS {cvss or 'N/A'}" + (" ⚠️ KEV" if is_kev else ""),
-                    smooth={"type": "curvedCW", "roundness": 0.15})
+                    color={"color": edge_c}, width=3 if is_kev else 1,
+                    arrows="to", smooth={"type": "curvedCW", "roundness": 0.12})
+
+    # ─── 2. ASSET CONNECTIVITY ────────────────────────
+    connections = surreal_query(db, """
+        SELECT in.hostname AS src, out.hostname AS dst, protocol, port, description
+        FROM connects_to;
+    """)
+    for c in connections:
+        src_h = c.get("src", "")
+        dst_h = c.get("dst", "")
+        if not src_h or not dst_h:
+            continue
+        src_node = f"asset:{src_h.replace('-', '_')}"
+        dst_node = f"asset:{dst_h.replace('-', '_')}"
+        if src_node in G.nodes and dst_node in G.nodes:
+            proto = c.get("protocol", "")
+            port = c.get("port", "")
+            G.add_edge(src_node, dst_node,
+                color={"color": "rgba(0,255,65,0.35)", "highlight": "#00FF41"},
+                width=2, arrows="to",
+                title=f"{proto.upper()}:{port} — {c.get('description', '')}",
+                label=f"{proto}:{port}" if proto else "",
+                font={"size": 7, "color": "rgba(0,255,65,0.5)"},
+                smooth={"type": "curvedCW", "roundness": 0.15},
+                dashes=False)
+
+    # ─── 3. SECURITY CONTROLS ─────────────────────────
+    if show_controls:
+        controls = surreal_query(db, """
+            SELECT name, control_type, effectiveness, description,
+                ->protects->asset.hostname AS protected_assets,
+                ->guards->network_segment.name AS guarded_segments
+            FROM security_control;
+        """)
+        for ctrl in controls:
+            cname = ctrl.get("name", "")
+            ctype = ctrl.get("control_type", "")
+            eff = ctrl.get("effectiveness", 0) or 0
+            ctrl_id = cname.replace(" ", "_").replace("(", "").replace(")", "")[:40]
+            ctrl_node = f"ctrl:{ctrl_id}"
+            eff_pct = int(eff * 100)
+            G.add_node(ctrl_node,
+                label=f"🛡️ {ctype.upper()}\n{eff_pct}%",
+                group="control",
+                shape="hexagon",
+                color={"background": "rgba(0,255,65,0.15)", "border": "#00FF41"},
+                size=22,
+                font={**FONT, "size": 8, "color": "#00FF41"},
+                title=f"""<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid #00FF41;padding:10px;'>
+                    <div style='color:#00FF41;text-shadow:0 0 10px #00FF41;'>🛡️ {cname}</div>
+                    <div style='color:#7FB87F;font-size:10px;margin-top:4px;'>TYPE: {ctype.upper()}</div>
+                    <div style='color:#FFB800;font-size:10px;'>EFFECTIVENESS: {eff_pct}%</div>
+                    <div style='margin-top:4px;color:#3D6B3D;font-size:10px;'>{ctrl.get('description', '')[:200]}</div>
+                </div>""",
+                shadow={"enabled": True, "color": "#00FF41", "size": 5},
+            )
+            for ah in _flatten(ctrl.get("protected_assets", [])):
+                asset_n = f"asset:{ah.replace('-', '_')}"
+                if asset_n in G.nodes:
+                    G.add_edge(ctrl_node, asset_n,
+                        color={"color": "rgba(0,255,65,0.2)"},
+                        width=1, arrows="to", dashes=[5, 5],
+                        title=f"PROTECTS ({eff_pct}%)",
+                        smooth={"type": "curvedCW", "roundness": 0.25})
+
+    # ─── 4. THREAT VECTORS ────────────────────────────
+    if show_threats:
+        threats = surreal_query(db, """
+            SELECT name, vector_type, severity, mitre_technique_id, description,
+                ->exposes->asset.hostname AS targeted_assets
+            FROM threat_vector;
+        """)
+        for tv in threats:
+            tvname = tv.get("name", "")
+            tvtype = tv.get("vector_type", "")
+            sev = tv.get("severity", 5) or 5
+            mitre = tv.get("mitre_technique_id", "")
+            tv_id = tvtype
+            tv_node = f"threat:{tv_id}"
+            sev_color = "#FF3333" if sev >= 8 else "#FF6B00" if sev >= 6 else "#FFB800"
+            G.add_node(tv_node,
+                label=f"💀 {tvtype.upper()}\n{sev}/10",
+                group="threat_vector",
+                shape="star",
+                color={"background": sev_color, "border": sev_color},
+                size=25,
+                font={**FONT, "size": 8, "color": sev_color},
+                title=f"""<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid {sev_color};padding:10px;'>
+                    <div style='color:{sev_color};text-shadow:0 0 15px {sev_color};'>💀 {tvname}</div>
+                    <div style='color:#FFB800;font-size:10px;'>SEVERITY: {sev}/10 | MITRE: {mitre}</div>
+                    <div style='margin-top:4px;color:#7FB87F;font-size:10px;'>{tv.get('description', '')[:200]}</div>
+                </div>""",
+                shadow={"enabled": True, "color": sev_color, "size": 8},
+            )
+            for ah in _flatten(tv.get("targeted_assets", [])):
+                asset_n = f"asset:{ah.replace('-', '_')}"
+                if asset_n in G.nodes:
+                    G.add_edge(tv_node, asset_n,
+                        color={"color": f"rgba(255,51,51,0.3)", "highlight": sev_color},
+                        width=2, arrows="to", dashes=[8, 4],
+                        title=f"EXPOSES — {tvname} (sev {sev})",
+                        smooth={"type": "curvedCW", "roundness": 0.3})
 
     return G
 
 
 def add_threat_layer(G, db):
-    """Add threat groups and techniques connected to the software in the graph."""
-    sw_in_graph = set()
-    for n in G.nodes:
-        if n.startswith("sw:"):
-            parts = n.split(":")
-            if len(parts) >= 2:
-                sw_in_graph.add(parts[1])
-
-    if not sw_in_graph:
-        return G
-
+    """Add MITRE ATT&CK threat groups and techniques."""
     groups = surreal_query(db, """
         SELECT name, external_id, aliases, description,
-            ->uses->software.name AS sw_used,
             ->uses->technique.external_id AS tech_ids,
-            ->uses->technique.name AS tech_names,
-            ->uses->technique.description AS tech_descs
+            ->uses->technique.name AS tech_names
         FROM threat_group
         WHERE count(->uses->technique) > 0
-        LIMIT 15;
+        LIMIT 10;
     """)
-
     for g in groups:
         gname = g.get("name", "")
         geid = g.get("external_id", "")
-        aliases = g.get("aliases", [])
-
         tech_ids = _flatten(g.get("tech_ids", []))
         tech_names = _flatten(g.get("tech_names", []))
-        tech_descs = _flatten(g.get("tech_descs", []))
-
         if not tech_ids:
             continue
-
         g_node = f"group:{gname}"
-        alias_str = ", ".join(aliases[:4]) if isinstance(aliases, list) else ""
-        desc = (g.get("description", "") or "")[:250]
-
         if g_node not in G.nodes:
             G.add_node(g_node,
                 label=f"👤 {gname}\n({geid})",
-                group="threat_group",
-                shape=SHAPES["threat_group"],
-                color={"background": COLORS["threat_group"], "border": COLORS["threat_group"]},
-                size=35,
-                font={**FONT, "size": 12, "bold": True, "color": "#FF00FF"},
-                title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:350px;background:#0A0A0F;
-                    border:1px solid #FF00FF;padding:12px;'>
-                    <div style='color:#FF00FF;font-size:14px;text-shadow:0 0 15px #FF00FF;'>👤 {gname}</div>
-                    <div style='color:#7FB87F;font-size:10px;'>{geid}</div>
-                    {f"<div style='color:#3D6B3D;font-size:9px;'>AKA: {alias_str}</div>" if alias_str else ""}
-                    <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,#FF00FF,transparent);'></div>
-                    <div style='color:#7FB87F;font-size:10px;line-height:1.5;'>{desc}</div>
-                    <div style='color:#FFB800;font-size:10px;margin-top:4px;'>TECHNIQUES: {len(tech_ids)}</div>
-                    <div style='margin-top:4px;'>
-                        <a href='https://attack.mitre.org/groups/{geid}/' target='_blank'
-                            style='color:#00FFFF;font-size:10px;text-shadow:0 0 5px #00FFFF;'>MITRE →</a>
-                    </div>
-                </div>""",
-                shadow={"enabled": True, "color": "#FF00FF", "size": 10},
+                group="threat_group", shape="star",
+                color={"background": "#FF00FF", "border": "#FF00FF"},
+                size=30, font={**FONT, "size": 10, "bold": True, "color": "#FF00FF"},
+                title=f"<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid #FF00FF;padding:10px;'><div style='color:#FF00FF;text-shadow:0 0 15px #FF00FF;'>👤 {gname} ({geid})</div><div style='color:#7FB87F;font-size:10px;'>TECHNIQUES: {len(tech_ids)}</div></div>",
+                shadow={"enabled": True, "color": "#FF00FF", "size": 8},
             )
-
-        for i, (tid, tname) in enumerate(zip(tech_ids[:8], tech_names[:8])):
+        for tid, tname in zip(tech_ids[:6], tech_names[:6]):
             if not tid:
                 continue
             t_node = f"tech:{tid}"
-            tdesc = (tech_descs[i] if i < len(tech_descs) else "") or ""
-            tdesc = str(tdesc)[:200]
-
             if t_node not in G.nodes:
                 G.add_node(t_node,
-                    label=f"⚔️ {tid}\n{str(tname or '')[:25]}",
-                    group="technique",
-                    shape=SHAPES["technique"],
-                    color={"background": COLORS["technique"], "border": COLORS["technique"]},
-                    size=18,
-                    font={**FONT, "size": 9, "color": "#0080FF"},
-                    title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:300px;background:#0A0A0F;
-                        border:1px solid #0080FF;padding:10px;'>
-                        <div style='color:#0080FF;text-shadow:0 0 10px #0080FF;'>⚔️ {tname}</div>
-                        <div style='color:#7FB87F;font-size:10px;'>{tid}</div>
-                        <div style='margin:4px 0;height:1px;background:linear-gradient(90deg,transparent,#0080FF,transparent);'></div>
-                        <div style='color:#7FB87F;font-size:10px;'>{tdesc}</div>
-                    </div>""",
-                    shadow={"enabled": True, "color": "#0080FF", "size": 5},
+                    label=f"⚔️ {tid}\n{str(tname or '')[:20]}",
+                    group="technique", shape="dot",
+                    color={"background": "#0080FF", "border": "#0080FF"},
+                    size=15, font={**FONT, "size": 8, "color": "#0080FF"},
+                    shadow={"enabled": True, "color": "#0080FF", "size": 4},
                 )
-
             G.add_edge(g_node, t_node,
-                color={"color": "rgba(255,0,255,0.4)", "highlight": "#FF00FF"},
-                width=1, arrows="to", title=f"USES {tid}",
+                color={"color": "rgba(255,0,255,0.3)"}, width=1, arrows="to",
                 smooth={"type": "curvedCW", "roundness": 0.2})
-
     return G
+
+
+def find_attack_paths(G) -> list:
+    """Find shortest attack paths from internet-facing assets to crown jewels.
+    Returns list of (path, risk_score) tuples."""
+    # Identify entry points (internet-facing assets)
+    entry_points = [n for n, d in G.nodes(data=True)
+                    if d.get("group") == "asset" and d.get("is_internet_facing")]
+    # Identify crown jewels
+    crown_jewels = [n for n, d in G.nodes(data=True)
+                    if d.get("group") == "asset" and d.get("is_crown_jewel")]
+
+    if not entry_points or not crown_jewels:
+        return []
+
+    # Build undirected view for path finding (only asset→asset edges)
+    asset_graph = nx.Graph()
+    for n, d in G.nodes(data=True):
+        if d.get("group") == "asset":
+            asset_graph.add_node(n, **d)
+    for u, v, d in G.edges(data=True):
+        if u.startswith("asset:") and v.startswith("asset:"):
+            asset_graph.add_edge(u, v, **d)
+
+    paths = []
+    for entry in entry_points:
+        for crown in crown_jewels:
+            try:
+                path = nx.shortest_path(asset_graph, entry, crown)
+                if len(path) > 1:
+                    # Calculate path risk
+                    crit = G.nodes[crown].get("criticality_score", 5)
+                    paths.append((path, crit * 10))
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+
+    # Sort by risk (highest first)
+    paths.sort(key=lambda x: x[1], reverse=True)
+    return paths
+
+
+def highlight_attack_paths(G, paths):
+    """Highlight the top attack paths on the graph with glowing red edges."""
+    for path, risk in paths[:3]:  # Top 3 paths
+        for i in range(len(path) - 1):
+            src, dst = path[i], path[i + 1]
+            # Check both directions
+            if G.has_edge(src, dst):
+                G[src][dst]["color"] = {"color": "#FF0055", "highlight": "#FF3333"}
+                G[src][dst]["width"] = 5
+                G[src][dst]["dashes"] = False
+                G[src][dst]["title"] = f"⚠️ ATTACK PATH — risk {risk}"
+            elif G.has_edge(dst, src):
+                G[dst][src]["color"] = {"color": "#FF0055", "highlight": "#FF3333"}
+                G[dst][src]["width"] = 5
+                G[dst][src]["dashes"] = False
+                G[dst][src]["title"] = f"⚠️ ATTACK PATH — risk {risk}"
 
 
 def _build_matrix_legend():
@@ -385,102 +467,115 @@ def _build_matrix_legend():
         position: absolute; bottom: 16px; left: 16px; z-index: 999;
         background: rgba(10, 10, 15, 0.95); border: 1px solid rgba(0,255,65,0.3);
         padding: 16px 20px; font-family: 'Share Tech Mono', monospace; color: #00FF41;
-        font-size: 11px; max-width: 240px; line-height: 1.8;
+        font-size: 10px; max-width: 260px; line-height: 1.8;
         box-shadow: 0 0 20px rgba(0,255,65,0.1);
     ">
-        <div style="font-size:12px;color:#00FF41;text-shadow:0 0 10px rgba(0,255,65,0.5);
-            letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">⬡ LEGEND</div>
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-            <div style="width:14px;height:14px;background:#FF3333;box-shadow:0 0 8px #FF3333;"></div>
-            <span style="color:#E0FFE0;">🌐 Asset (Internet-Facing)</span>
+        <div style="font-size:11px;text-shadow:0 0 10px rgba(0,255,65,0.5);letter-spacing:2px;margin-bottom:6px;">⬡ LEGEND</div>
+        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
+            <div style="width:12px;height:12px;border:2px solid #FFD700;box-shadow:0 0 8px #FFD700;"></div>
+            <span style="color:#FFD700;">👑 Crown Jewel</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-            <div style="width:14px;height:14px;background:#00FF41;box-shadow:0 0 8px #00FF41;"></div>
-            <span style="color:#E0FFE0;">🔒 Asset (Internal)</span>
+        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
+            <div style="width:12px;height:12px;border:2px solid #FF6B00;"></div>
+            <span style="color:#E0FFE0;">🌐 Internet-Facing Asset</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-            <div style="width:14px;height:14px;background:#00FFFF;box-shadow:0 0 8px #00FFFF;transform:rotate(45deg);"></div>
+        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
+            <div style="width:12px;height:12px;background:#00FFFF;transform:rotate(45deg);"></div>
             <span style="color:#E0FFE0;">📦 Software Version</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-            <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;
-                border-bottom:14px solid #FF3333;filter:drop-shadow(0 0 4px #FF3333);"></div>
-            <span style="color:#E0FFE0;">🔓 CVE (Critical)</span>
+        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
+            <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid #FF3333;"></div>
+            <span style="color:#E0FFE0;">🔓 CVE</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-            <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;
-                border-bottom:14px solid #FF0055;filter:drop-shadow(0 0 6px #FF0055);"></div>
-            <span style="color:#E0FFE0;">⚠️ CVE (KEV — Active)</span>
+        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
+            <div style="width:12px;height:12px;background:rgba(0,255,65,0.3);border:1px solid #00FF41;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);"></div>
+            <span style="color:#E0FFE0;">🛡️ Security Control</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-            <svg width="14" height="14"><polygon points="7,0 14,5 11,14 3,14 0,5" fill="#FF00FF"
-                style="filter:drop-shadow(0 0 4px #FF00FF);"/></svg>
-            <span style="color:#E0FFE0;">👤 Threat Group</span>
+        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
+            <svg width="12" height="12"><polygon points="6,0 12,4 10,12 2,12 0,4" fill="#FF3333"/></svg>
+            <span style="color:#E0FFE0;">💀 Threat Vector</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-            <div style="width:14px;height:14px;background:#0080FF;border-radius:50%;box-shadow:0 0 6px #0080FF;"></div>
-            <span style="color:#E0FFE0;">⚔️ ATT&CK Technique</span>
+        <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,255,65,0.15);">
+            <div style="color:#FF6B00;">ZONES:</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px;">
+                <span style="color:#FF0055;">● INTERNET</span>
+                <span style="color:#FF6B00;">● DMZ</span>
+                <span style="color:#FFB800;">● INTERNAL</span>
+                <span style="color:#00FFFF;">● CORPORATE</span>
+                <span style="color:#00FF41;">● AIRGAP</span>
+            </div>
         </div>
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,255,65,0.15);color:#3D6B3D;font-size:9px;letter-spacing:1px;">
-            DRAG · ZOOM · HOVER FOR INTEL
+        <div style="margin-top:4px;color:#3D6B3D;font-size:8px;letter-spacing:1px;">
+            <span style="color:#FF0055;">━━</span> ATTACK PATH &nbsp;
+            <span style="color:rgba(0,255,65,0.5);">──</span> NETWORK &nbsp;
+            <span style="color:rgba(0,255,65,0.3);">┈┈</span> CONTROL/THREAT
         </div>
     </div>
     """
 
 
-def _build_matrix_stats(G):
-    """Build Matrix-style stats overlay."""
-    groups = {"asset": 0, "software": 0, "cve": 0, "technique": 0, "threat_group": 0}
-    kev_count = 0
+def _build_matrix_stats(G, paths=None):
+    """Build Matrix-style stats overlay with attack path info."""
+    groups = {"asset": 0, "software": 0, "cve": 0, "control": 0, "threat_vector": 0,
+              "technique": 0, "threat_group": 0}
+    crown_count = 0
     internet_facing = 0
     for _, data in G.nodes(data=True):
         g = data.get("group", "")
         if g in groups:
             groups[g] += 1
+        if data.get("is_crown_jewel"):
+            crown_count += 1
         if data.get("is_internet_facing"):
             internet_facing += 1
+
+    path_html = ""
+    if paths:
+        path_html = f"""
+        <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,0,85,0.3);">
+            <div style="color:#FF0055;text-shadow:0 0 8px #FF0055;">⚠️ ATTACK PATHS: {len(paths)}</div>
+        </div>"""
+        for i, (path, risk) in enumerate(paths[:3]):
+            labels = []
+            for n in path:
+                lbl = G.nodes[n].get("label", n).replace("🌐 ", "").replace("🔒 ", "").replace("🏢 ", "").replace(" 👑", "")
+                labels.append(lbl)
+            path_str = " → ".join(labels)
+            path_html += f"""<div style="color:#FF6B00;font-size:9px;margin-top:2px;">
+                {i+1}. {path_str}</div>"""
 
     return f"""
     <div id="graph-stats" style="
         position: absolute; top: 16px; right: 16px; z-index: 999;
         background: rgba(10, 10, 15, 0.95); border: 1px solid rgba(0,255,65,0.3);
         padding: 16px 20px; font-family: 'Share Tech Mono', monospace; color: #00FF41;
-        font-size: 11px; line-height: 1.8;
+        font-size: 10px; line-height: 1.8; max-width: 280px;
         box-shadow: 0 0 20px rgba(0,255,65,0.1);
     ">
-        <div style="font-size:12px;text-shadow:0 0 10px rgba(0,255,65,0.5);
-            letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">⬡ THREAT MATRIX</div>
-        <div><span style="color:#3D6B3D;">NODES:</span> <span style="text-shadow:0 0 8px #00FF41;font-size:14px;">{G.number_of_nodes()}</span></div>
-        <div><span style="color:#3D6B3D;">EDGES:</span> <span style="text-shadow:0 0 8px #00FF41;font-size:14px;">{G.number_of_edges()}</span></div>
+        <div style="font-size:11px;text-shadow:0 0 10px rgba(0,255,65,0.5);letter-spacing:2px;margin-bottom:4px;">⬡ THREAT MATRIX</div>
+        <div><span style="color:#3D6B3D;">NODES:</span> <span style="font-size:14px;">{G.number_of_nodes()}</span></div>
+        <div><span style="color:#3D6B3D;">EDGES:</span> <span style="font-size:14px;">{G.number_of_edges()}</span></div>
         <div style="margin:4px 0;height:1px;background:linear-gradient(90deg,transparent,rgba(0,255,65,0.3),transparent);"></div>
-        <div><span style="color:#FF3333;text-shadow:0 0 5px #FF3333;">🌐</span> {internet_facing} INTERNET-FACING</div>
+        <div><span style="color:#FFD700;">👑</span> {crown_count} CROWN JEWELS</div>
+        <div><span style="color:#FF3333;">🌐</span> {internet_facing} INTERNET-FACING</div>
         <div><span style="color:#FF3333;">🔓</span> {groups['cve']} CVEs MAPPED</div>
-        <div><span style="color:#00FFFF;">📦</span> {groups['software']} SOFTWARE</div>
-        {"<div><span style='color:#FF00FF;'>👤</span> " + str(groups['threat_group']) + " THREAT GROUPS</div>"
-         if groups['threat_group'] > 0 else ""}
-        {"<div><span style='color:#0080FF;'>⚔️</span> " + str(groups['technique']) + " TECHNIQUES</div>"
-         if groups['technique'] > 0 else ""}
+        <div><span style="color:#00FF41;">🛡️</span> {groups['control']} SECURITY CONTROLS</div>
+        <div><span style="color:#FF3333;">💀</span> {groups['threat_vector']} THREAT VECTORS</div>
+        {path_html}
     </div>
     """
 
 
 def _build_matrix_title():
-    """Build the Matrix-style title overlay."""
     return """
-    <div id="graph-title" style="
-        position: absolute; top: 16px; left: 16px; z-index: 999;
-        font-family: 'Share Tech Mono', monospace;
-    ">
-        <div style="font-size: 18px; color: #00FF41; text-shadow: 0 0 20px rgba(0,255,65,0.6);
-            letter-spacing: 4px; text-transform: uppercase;">ATTACK SURFACE MAP</div>
-        <div style="font-size: 10px; color: #3D6B3D; letter-spacing: 2px; margin-top: 2px;">
-            THREATGRAPH // REAL-TIME THREAT VISUALIZATION
-        </div>
+    <div id="graph-title" style="position: absolute; top: 16px; left: 16px; z-index: 999; font-family: 'Share Tech Mono', monospace;">
+        <div style="font-size: 18px; color: #00FF41; text-shadow: 0 0 20px rgba(0,255,65,0.6); letter-spacing: 4px;">ENTERPRISE ATTACK SURFACE</div>
+        <div style="font-size: 10px; color: #3D6B3D; letter-spacing: 2px; margin-top: 2px;">THREATGRAPH // NETWORK TOPOLOGY + THREAT VISUALIZATION</div>
     </div>
     """
 
 
-def render_graph_html(G: nx.DiGraph, height="700px") -> str:
+def render_graph_html(G: nx.DiGraph, height="750px", paths=None) -> str:
     """Render to interactive HTML with Matrix-style overlays."""
     net = Network(height=height, width="100%", directed=True, bgcolor="#000000",
                   font_color="#00FF41", notebook=False)
@@ -489,47 +584,28 @@ def render_graph_html(G: nx.DiGraph, height="700px") -> str:
         "physics": {
             "enabled": True,
             "barnesHut": {
-                "gravitationalConstant": -15000,
-                "centralGravity": 0.2,
-                "springLength": 200,
-                "springConstant": 0.025,
-                "damping": 0.1,
-                "avoidOverlap": 0.7,
+                "gravitationalConstant": -20000,
+                "centralGravity": 0.15,
+                "springLength": 220,
+                "springConstant": 0.02,
+                "damping": 0.09,
+                "avoidOverlap": 0.8,
             },
-            "stabilization": {
-                "enabled": True,
-                "iterations": 400,
-                "updateInterval": 20,
-            },
+            "stabilization": {"enabled": True, "iterations": 500, "updateInterval": 20},
         },
         "interaction": {
-            "hover": True,
-            "tooltipDelay": 80,
-            "zoomView": True,
-            "dragView": True,
-            "zoomSpeed": 0.5,
-            "navigationButtons": True,
-            "keyboard": True,
+            "hover": True, "tooltipDelay": 80, "zoomView": True, "dragView": True,
+            "zoomSpeed": 0.5, "navigationButtons": True, "keyboard": True,
         },
-        "edges": {
-            "smooth": {"enabled": True, "type": "continuous"},
-            "color": {"inherit": False},
-        },
-        "nodes": {
-            "borderWidth": 2,
-            "shadow": {"enabled": True, "size": 10, "color": "rgba(0,255,65,0.3)"},
-        },
+        "edges": {"smooth": {"enabled": True, "type": "continuous"}, "color": {"inherit": False}},
+        "nodes": {"borderWidth": 2, "shadow": {"enabled": True, "size": 10, "color": "rgba(0,255,65,0.2)"}},
     }))
 
     for node_id, data in G.nodes(data=True):
         net.add_node(
-            node_id,
-            label=data.get("label", node_id),
-            title=data.get("title", ""),
-            color=data.get("color", "#00FF41"),
-            shape=data.get("shape", "dot"),
-            size=data.get("size", 15),
-            font=data.get("font", FONT),
+            node_id, label=data.get("label", node_id), title=data.get("title", ""),
+            color=data.get("color", "#00FF41"), shape=data.get("shape", "dot"),
+            size=data.get("size", 15), font=data.get("font", FONT),
             borderWidth=data.get("borderWidth", 2),
             borderWidthSelected=data.get("borderWidthSelected", 4),
             shadow=data.get("shadow", {"enabled": True}),
@@ -537,12 +613,13 @@ def render_graph_html(G: nx.DiGraph, height="700px") -> str:
 
     for src, dst, data in G.edges(data=True):
         net.add_edge(
-            src, dst,
-            color=data.get("color", "rgba(0,255,65,0.3)"),
-            title=data.get("title", ""),
-            width=data.get("width", 1),
+            src, dst, color=data.get("color", "rgba(0,255,65,0.3)"),
+            title=data.get("title", ""), width=data.get("width", 1),
             arrows=data.get("arrows", "to"),
             smooth=data.get("smooth", {"type": "continuous"}),
+            dashes=data.get("dashes", False),
+            label=data.get("label", ""),
+            font=data.get("font", {"size": 0}),
         )
 
     tmpfile = tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False)
@@ -551,47 +628,34 @@ def render_graph_html(G: nx.DiGraph, height="700px") -> str:
         html = f.read()
     os.unlink(tmpfile.name)
 
-    # Inject Matrix rain, overlays, and styles
     legend = _build_matrix_legend()
-    stats = _build_matrix_stats(G)
+    stats = _build_matrix_stats(G, paths)
     title = _build_matrix_title()
 
     matrix_rain_js = """
     <canvas id="matrix-rain" style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;pointer-events:none;"></canvas>
     <script>
     (function() {
-        const canvas = document.getElementById('matrix-rain');
-        const ctx = canvas.getContext('2d');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        
-        const chars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEF';
+        const c = document.getElementById('matrix-rain');
+        const ctx = c.getContext('2d');
+        c.width = window.innerWidth; c.height = window.innerHeight;
+        const chars = 'アイウエオカキクケコサシスセソタチツテト0123456789ABCDEF';
         const fontSize = 12;
-        const columns = Math.floor(canvas.width / fontSize);
-        const drops = Array(columns).fill(1);
-        
+        const cols = Math.floor(c.width / fontSize);
+        const drops = Array(cols).fill(1);
         function draw() {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#00FF4120';
+            ctx.fillStyle = 'rgba(0,0,0,0.04)';
+            ctx.fillRect(0, 0, c.width, c.height);
+            ctx.fillStyle = '#00FF4118';
             ctx.font = fontSize + 'px monospace';
-            
             for(let i = 0; i < drops.length; i++) {
-                const text = chars[Math.floor(Math.random() * chars.length)];
-                ctx.fillText(text, i * fontSize, drops[i] * fontSize);
-                
-                if(drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
-                    drops[i] = 0;
-                }
+                ctx.fillText(chars[Math.floor(Math.random() * chars.length)], i * fontSize, drops[i] * fontSize);
+                if(drops[i] * fontSize > c.height && Math.random() > 0.975) drops[i] = 0;
                 drops[i]++;
             }
         }
         setInterval(draw, 50);
-        
-        window.addEventListener('resize', () => {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        });
+        window.addEventListener('resize', () => { c.width = window.innerWidth; c.height = window.innerHeight; });
     })();
     </script>
     """
@@ -599,57 +663,32 @@ def render_graph_html(G: nx.DiGraph, height="700px") -> str:
     matrix_css = """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Fira+Code:wght@300;400;500&display=swap');
-        body {
-            margin: 0; overflow: hidden;
-            background: #000000;
-            font-family: 'Share Tech Mono', monospace;
-        }
-        #mynetwork {
-            border: 1px solid rgba(0,255,65,0.2) !important;
-            box-shadow: 0 0 30px rgba(0,255,65,0.05), inset 0 0 30px rgba(0,255,65,0.02);
-        }
-        .vis-navigation .vis-button {
-            border-radius: 0 !important;
-            background: rgba(10,10,15,0.9) !important;
-            border: 1px solid rgba(0,255,65,0.3) !important;
-        }
-        .vis-navigation .vis-button:hover {
-            box-shadow: 0 0 10px rgba(0,255,65,0.3) !important;
-        }
-        /* Pulsing glow on the network container */
-        #mynetwork::after {
-            content: '';
-            position: absolute;
-            inset: 0;
-            border: 1px solid rgba(0,255,65,0.1);
-            animation: borderPulse 3s ease-in-out infinite;
-            pointer-events: none;
-        }
-        @keyframes borderPulse {
-            0%, 100% { box-shadow: 0 0 5px rgba(0,255,65,0.1); }
-            50% { box-shadow: 0 0 20px rgba(0,255,65,0.2); }
-        }
+        body { margin: 0; overflow: hidden; background: #000000; font-family: 'Share Tech Mono', monospace; }
+        #mynetwork { border: 1px solid rgba(0,255,65,0.2) !important; box-shadow: 0 0 30px rgba(0,255,65,0.05); }
+        .vis-navigation .vis-button { border-radius: 0 !important; background: rgba(10,10,15,0.9) !important; border: 1px solid rgba(0,255,65,0.3) !important; }
+        .vis-navigation .vis-button:hover { box-shadow: 0 0 10px rgba(0,255,65,0.3) !important; }
     </style>
     """
 
-    html = html.replace("</body>", f"""
-        {matrix_rain_js}
-        {legend}
-        {stats}
-        {title}
-        {matrix_css}
-    </body>""")
-
+    html = html.replace("</body>", f"{matrix_rain_js}{legend}{stats}{title}{matrix_css}</body>")
     return html
 
 
-def generate_attack_path_viz(hostname=None, include_groups=False) -> str:
-    """Main entry point — generate interactive Matrix-style graph HTML."""
+def generate_attack_path_viz(hostname=None, include_groups=False, show_controls=True,
+                              show_threats=True, show_attack_paths=True) -> str:
+    """Main entry point — generate Matrix-style enterprise graph."""
     db = get_db()
-    G = build_attack_graph(db, hostname)
+    G = build_enterprise_graph(db, hostname, show_controls, show_threats)
     if include_groups:
         G = add_threat_layer(G, db)
-    return render_graph_html(G)
+
+    paths = []
+    if show_attack_paths:
+        paths = find_attack_paths(G)
+        if paths:
+            highlight_attack_paths(G, paths)
+
+    return render_graph_html(G, paths=paths)
 
 
 if __name__ == "__main__":

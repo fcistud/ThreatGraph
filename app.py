@@ -840,38 +840,58 @@ with tab3:
     <div class="section-header">
         <div class="section-icon" style="background:rgba(56,189,248,0.15);">🔗</div>
         <div>
-            <div class="section-title">Attack Path Graph</div>
-            <div class="section-desc">Interactive visualization of how attackers can reach your assets through known vulnerabilities</div>
+            <div class="section-title">Enterprise Attack Surface</div>
+            <div class="section-desc">Full network topology with attack path tracing from internet to crown jewels</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("""
     <div class="info-callout">
-        <strong>Reading the graph:</strong> 🖥️ <strong>Orange boxes</strong> = your assets (servers). 
-        💎 <strong>Purple diamonds</strong> = software versions running on them. 
-        🔺 <strong>Red/orange triangles</strong> = CVEs (vulnerabilities). 
-        Brighter red = higher CVSS = more dangerous. 
-        ⭐ <strong>Purple stars</strong> = threat groups (when enabled). 
+        <strong>Reading the graph:</strong>
+        🖥️ <strong>Boxes</strong> = assets (color = criticality, gold border = 👑 crown jewel, 🌐 = internet-facing).
+        📦 <strong>Diamonds</strong> = software. 🔺 <strong>Triangles</strong> = CVEs.
+        🛡️ <strong>Hexagons</strong> = security controls. 💀 <strong>Stars</strong> = threat vectors.
+        <span style="color:#FF0055;"><strong>Red paths</strong></span> = attack routes from internet to crown jewels.
         <em>Drag nodes to rearrange. Hover for details.</em>
     </div>
     """, unsafe_allow_html=True)
 
+    # Controls
     col_a, col_b = st.columns([3, 1])
     with col_a:
-        filter_host = st.selectbox("🖥️ Filter by asset", ["All Assets"] + [
-            "web-server-01", "db-server-01", "api-server-01", "mail-server-01", "dev-workstation-01"
-        ], help="Select a specific asset to focus the graph, or view all connections at once.")
+        try:
+            db_tmp = get_db()
+            asset_list = surreal_query(db_tmp, "SELECT hostname FROM asset ORDER BY hostname;")
+            asset_names = [a.get("hostname", "") for a in asset_list if a.get("hostname")]
+        except Exception:
+            asset_names = []
+        filter_host = st.selectbox("🖥️ Filter by asset", ["All Assets"] + asset_names)
     with col_b:
-        include_groups = st.checkbox("Show threat groups", value=False,
-                                     help="Adds known APT groups and the techniques they use to the graph. Makes it busier but shows attribution.")
+        include_groups = st.checkbox("👤 Threat Groups", value=False,
+                                     help="Shows APT groups and their techniques")
+
+    col_c, col_d, col_e = st.columns(3)
+    with col_c:
+        show_controls = st.checkbox("🛡️ Security Controls", value=True,
+                                     help="Shows firewalls, WAF, IDS, EDR protecting assets")
+    with col_d:
+        show_threats = st.checkbox("💀 Threat Vectors", value=True,
+                                    help="Shows phishing, brute force, MitM threat vectors")
+    with col_e:
+        show_paths = st.checkbox("⚠️ Attack Paths", value=True,
+                                  help="Highlights shortest attack path from internet to crown jewels")
 
     try:
         from src.tools.graph_viz import generate_attack_path_viz
         hostname_filter = None if filter_host == "All Assets" else filter_host
-        html = generate_attack_path_viz(hostname=hostname_filter, include_groups=include_groups)
+        html = generate_attack_path_viz(
+            hostname=hostname_filter, include_groups=include_groups,
+            show_controls=show_controls, show_threats=show_threats,
+            show_attack_paths=show_paths
+        )
         import streamlit.components.v1 as components
-        components.html(html, height=600, scrolling=False)
+        components.html(html, height=650, scrolling=False)
     except Exception as e:
         st.warning(f"Graph visualization error: {e}")
 
@@ -884,7 +904,8 @@ with tab3:
                 for p in paths:
                     h = p.get("hostname", "?")
                     c = p.get("criticality", "?")
-                    st.markdown(f"**🖥️ {h}** ({c.upper()})")
+                    crown = "👑 " if p.get("is_crown_jewel") else ""
+                    st.markdown(f"**{crown}🖥️ {h}** ({c.upper()})")
                     sw = p.get("software", [])
                     cves = p.get("cve_ids", [])
                     if sw:
