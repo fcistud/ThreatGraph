@@ -82,13 +82,18 @@ SCHEMA_STATEMENTS = [
     "DEFINE TABLE campaign_uses SCHEMALESS",
     "DEFINE TABLE detects SCHEMALESS",
 
-    # Layer 2: Assets
+    # Layer 2: Assets (enriched)
     "DEFINE TABLE asset SCHEMAFULL",
     "DEFINE FIELD hostname ON asset TYPE string",
     "DEFINE FIELD os ON asset TYPE string",
     "DEFINE FIELD ip_address ON asset TYPE option<string>",
     "DEFINE FIELD network_zone ON asset TYPE string",
     "DEFINE FIELD criticality ON asset TYPE string",
+    "DEFINE FIELD criticality_score ON asset TYPE option<float>",
+    "DEFINE FIELD business_function ON asset TYPE option<string>",
+    "DEFINE FIELD is_crown_jewel ON asset TYPE option<bool>",
+    "DEFINE FIELD open_ports ON asset TYPE option<array>",
+    "DEFINE FIELD services ON asset TYPE option<array>",
     "DEFINE FIELD owner ON asset TYPE option<string>",
     "DEFINE INDEX idx_asset_hostname ON asset FIELDS hostname UNIQUE",
 
@@ -112,6 +117,36 @@ SCHEMA_STATEMENTS = [
     "DEFINE TABLE has_cve SCHEMALESS",
     "DEFINE TABLE affects SCHEMALESS",
     "DEFINE TABLE linked_to_software SCHEMALESS",
+
+    # Layer 2+: Network Topology
+    "DEFINE TABLE network_segment SCHEMAFULL",
+    "DEFINE FIELD name ON network_segment TYPE string",
+    "DEFINE FIELD zone_type ON network_segment TYPE string",
+    "DEFINE FIELD subnet ON network_segment TYPE string",
+    "DEFINE FIELD description ON network_segment TYPE string",
+
+    "DEFINE TABLE security_control SCHEMAFULL",
+    "DEFINE FIELD name ON security_control TYPE string",
+    "DEFINE FIELD control_type ON security_control TYPE string",
+    "DEFINE FIELD effectiveness ON security_control TYPE float",
+    "DEFINE FIELD description ON security_control TYPE string",
+
+    "DEFINE TABLE threat_vector SCHEMAFULL",
+    "DEFINE FIELD name ON threat_vector TYPE string",
+    "DEFINE FIELD vector_type ON threat_vector TYPE string",
+    "DEFINE FIELD severity ON threat_vector TYPE float",
+    "DEFINE FIELD mitre_technique_id ON threat_vector TYPE option<string>",
+    "DEFINE FIELD description ON threat_vector TYPE string",
+    "DEFINE FIELD applicable_zones ON threat_vector TYPE array",
+
+    # Network topology edges
+    "DEFINE TABLE connects_to SCHEMALESS",     # asset → asset
+    "DEFINE TABLE resides_in SCHEMALESS",      # asset → network_segment
+    "DEFINE TABLE routes_to SCHEMALESS",       # network_segment → network_segment
+    "DEFINE TABLE protects SCHEMALESS",        # security_control → asset
+    "DEFINE TABLE guards SCHEMALESS",          # security_control → network_segment
+    "DEFINE TABLE exposes SCHEMALESS",         # threat_vector → asset
+    "DEFINE TABLE blocked_by SCHEMALESS",      # threat_vector → security_control
 
     # Layer 3: Code Awareness
     "DEFINE TABLE code_module SCHEMAFULL",
@@ -138,6 +173,7 @@ SCHEMA_STATEMENTS = [
 ]
 
 
+
 def init_schema(db: Surreal):
     """Apply the full schema DDL to SurrealDB."""
     for stmt in SCHEMA_STATEMENTS:
@@ -153,8 +189,11 @@ def get_stats(db: Surreal) -> dict:
     tables = [
         "technique", "tactic", "threat_group", "software", "mitigation",
         "campaign", "data_source", "asset", "software_version", "cve",
+        "network_segment", "security_control", "threat_vector",
         "uses", "belongs_to", "employs", "mitigates", "subtechnique_of",
         "runs", "has_cve", "affects", "linked_to_software",
+        "connects_to", "resides_in", "routes_to", "protects", "guards",
+        "exposes", "blocked_by",
     ]
     stats = {}
     for table in tables:
