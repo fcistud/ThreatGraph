@@ -11,6 +11,7 @@ A polished, beginner-friendly Streamlit dashboard with:
 import json
 import sys
 import os
+import uuid
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -22,6 +23,7 @@ from src.agents.workflow import run_query
 from src.tools.surreal_tools import (
     get_attack_paths, compute_exposure_score, get_coverage_gaps, search_kg, surreal_query
 )
+from src.tools.tracing import get_tracing_status
 
 # ─── PAGE CONFIG ──────────────────────────────────────
 
@@ -613,6 +615,9 @@ st.markdown("""
 # ─── SIDEBAR ─────────────────────────────────────────
 
 with st.sidebar:
+    if "thread_id" not in st.session_state:
+        st.session_state["thread_id"] = str(uuid.uuid4())
+
     st.markdown("## 📊 Knowledge Graph")
     try:
         stats = cached_stats()
@@ -639,6 +644,19 @@ with st.sidebar:
         st.error(f"DB: {e}")
 
     st.markdown("---")
+    st.markdown("## 🧵 Investigation State")
+    thread_id = st.text_input("Thread ID", value=st.session_state.get("thread_id", ""), key="sidebar_thread_id")
+    st.session_state["thread_id"] = thread_id
+    if st.button("New Investigation Thread", use_container_width=True):
+        st.session_state["thread_id"] = str(uuid.uuid4())
+        st.rerun()
+
+    trace_status = get_tracing_status()
+    trace_label = "enabled" if trace_status.get("enabled") else "disabled"
+    st.caption(f"LangSmith tracing: {trace_label}")
+    st.caption(f"Project: {trace_status.get('project')}")
+
+    st.markdown("---")
     st.markdown("## 🎯 Quick Queries")
     st.markdown('<div class="info-callout">Click any query below to auto-fill the analyst. These showcase different capabilities.</div>', unsafe_allow_html=True)
 
@@ -663,7 +681,7 @@ with st.sidebar:
             "CISA KEV": "CISA's Known Exploited Vulnerabilities catalog — CVEs that are *actively being used by attackers right now*. Highest urgency.",
             "Technique": "A specific method an attacker uses (e.g., T1059 = Command Line execution). There are 691 catalogued techniques.",
             "Threat Group": "A named hacker group (e.g., APT29 = Russia's SVR intelligence). There are 172 tracked groups.",
-            "Exposure Score": "ThreatGraph's custom metric combining CVSS severity × asset criticality × KEV status. Higher = more urgent.",
+            "Exposure Score": "ThreatGraph's graph-backed prioritization metric. It combines vulnerability severity, business criticality, network exposure, controls, crown-jewel status, and mapped threat context.",
             "Attack Path": "The chain: Asset → Software → CVE → Technique → Threat Group. Shows *how* an attacker could reach your systems.",
             "CPE": "Common Platform Enumeration — a standardized way to name software products and versions for vulnerability matching.",
             "Kill Chain": "The stages of an attack: Reconnaissance → Initial Access → Execution → ... → Impact. Maps to ATT&CK tactics.",
@@ -699,7 +717,7 @@ with tab1:
     st.markdown("""
     <div class="info-callout">
         <strong>How it works:</strong> Your question is classified → routed to the right tools → the knowledge graph is queried 
-        for matching techniques, CVEs, and assets → results are synthesized into an actionable report with a remediation playbook.
+        for matching techniques, CVEs, software, controls, threat vectors, and assets → results are synthesized into an actionable report with a remediation playbook.
     </div>
     """, unsafe_allow_html=True)
 
@@ -714,7 +732,7 @@ with tab1:
     if analyze and q:
         with st.spinner("🧠 Agent is reasoning over the knowledge graph..."):
             try:
-                result = run_query(q)
+                result = run_query(q, thread_id=st.session_state.get("thread_id"))
 
                 # Query type badge
                 type_colors = {
@@ -735,6 +753,34 @@ with tab1:
                 st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(56,189,248,0.15);">📋</div>
                 <div><div class="section-title">Threat Assessment</div></div></div>""", unsafe_allow_html=True)
                 st.markdown(result["synthesis"])
+
+                st.markdown("---")
+                st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(99,102,241,0.15);">🧵</div>
+                <div><div class="section-title">Workflow State</div></div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class="glass-card">
+                    <strong>Thread ID:</strong> <code>{result.get("thread_id", "")}</code><br/>
+                    <strong>Matched Group:</strong> {result.get("matched_group") or "None"}<br/>
+                    <strong>Matched Asset:</strong> {result.get("matched_asset") or "None"}<br/>
+                    <strong>Prior Context:</strong> {result.get("investigation_context", {}).get("top_asset") or "None"}
+                </div>
+                """, unsafe_allow_html=True)
+
+                evidence_bundle = result.get("evidence_bundle", {})
+                if evidence_bundle:
+                    st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(251,191,36,0.15);">🧩</div>
+                    <div><div class="section-title">Evidence Bundle</div></div></div>""", unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="glass-card">
+                        <strong>Asset:</strong> {evidence_bundle.get("hostname")}<br/>
+                        <strong>Software Versions:</strong> {len(evidence_bundle.get("software_versions", []))}<br/>
+                        <strong>CVEs:</strong> {len(evidence_bundle.get("cves", []))}<br/>
+                        <strong>ATT&amp;CK Software:</strong> {len(evidence_bundle.get("attack_software", []))}<br/>
+                        <strong>Threat Groups:</strong> {len(evidence_bundle.get("threat_groups", []))}<br/>
+                        <strong>Controls:</strong> {len(evidence_bundle.get("controls", []))}<br/>
+                        <strong>Threat Vectors:</strong> {len(evidence_bundle.get("threat_vectors", []))}
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 # Playbook
                 st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(52,211,153,0.15);">🔧</div>
@@ -784,9 +830,8 @@ with tab2:
 
     st.markdown("""
     <div class="info-callout">
-        <strong>What is an exposure score?</strong> It combines three factors: (1) the total CVSS severity of all CVEs on an asset, 
-        (2) a multiplier based on asset criticality (critical=4×, high=3×, medium=2×), and (3) a +20 bonus per CVE that's in 
-        CISA's Known Exploited Vulnerabilities list (meaning attackers are <em>actively using it right now</em>).
+        <strong>What is an exposure score?</strong> It is not just a CVE count. The score uses graph-backed evidence including
+        CVEs, KEV status, criticality, crown-jewel state, network zone, in-place controls, and mapped non-software threat vectors.
     </div>
     """, unsafe_allow_html=True)
 
