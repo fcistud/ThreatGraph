@@ -771,7 +771,263 @@ with tab3:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 4 — COVERAGE GAPS
+# TAB 4 — ASSET INTEL (DEEP DIVE)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab4:
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(251,191,36,0.15);">🖥️</div>
+        <div>
+            <div class="section-title">Asset Intelligence Deep Dive</div>
+            <div class="section-desc">Select an asset to see its complete vulnerability profile, software inventory, and risk analysis</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-callout">
+        <strong>What is this?</strong> A detailed per-asset breakdown showing every piece of software installed,
+        every CVE it's exposed to, CVSS severity distribution, and which vulnerabilities are actively being exploited
+        in the wild (KEV). Use this to understand exactly what makes a specific server risky.
+    </div>
+    """, unsafe_allow_html=True)
+
+    asset_choice = st.selectbox("Select asset to investigate:", [
+        "web-server-01", "db-server-01", "api-server-01", "mail-server-01", "dev-workstation-01"
+    ], key="asset_deep_dive")
+
+    try:
+        db = get_db()
+        details = surreal_query(db, """
+            SELECT hostname, criticality, os, network_zone, ip_address, owner,
+                ->runs->software_version.name AS sw_names,
+                ->runs->software_version.version AS sw_versions,
+                ->runs->software_version->has_cve->cve.cve_id AS cve_ids,
+                ->runs->software_version->has_cve->cve.cvss_score AS cvss_scores,
+                ->runs->software_version->has_cve->cve.is_kev AS kev_flags,
+                ->runs->software_version->has_cve->cve.description AS cve_descs
+            FROM asset WHERE hostname = $h;
+        """, {"h": asset_choice})
+
+        if details:
+            a = details[0]
+            crit = a.get("criticality", "medium")
+
+            def _flat(val):
+                out = []
+                if not isinstance(val, list):
+                    return [val] if val else []
+                for v in val:
+                    if isinstance(v, list):
+                        out.extend(_flat(v))
+                    elif v is not None:
+                        out.append(v)
+                return out
+
+            sw_names = _flat(a.get("sw_names", []))
+            sw_versions = _flat(a.get("sw_versions", []))
+            cve_ids = _flat(a.get("cve_ids", []))
+            cvss_scores = [s for s in _flat(a.get("cvss_scores", [])) if isinstance(s, (int, float))]
+            kev_flags = _flat(a.get("kev_flags", []))
+
+            kev_count = sum(1 for k in kev_flags if k)
+            max_cvss = max(cvss_scores) if cvss_scores else 0
+            avg_cvss = sum(cvss_scores) / len(cvss_scores) if cvss_scores else 0
+
+            crit_colors = {"critical": "#ef4444", "high": "#f97316", "medium": "#eab308", "low": "#22c55e"}
+            st.markdown(f"""
+            <div class="glass-card" style="border-left:4px solid {crit_colors.get(crit, '#eab308')};">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <h3 style="margin:0;font-size:1.3rem;">🖥️ {a.get('hostname', '?')}</h3>
+                        <p style="margin:4px 0 0 0;">{a.get('os', '')} · {a.get('network_zone', '')} zone · IP: {a.get('ip_address', '')}</p>
+                    </div>
+                    <span class="risk-badge risk-{crit}" style="font-size:0.85rem;padding:0.4rem 1.2rem;">{crit.upper()} CRITICALITY</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"""
+            <div class="stat-grid">
+                <div class="stat-card"><div class="stat-value">{len(sw_names)}</div><div class="stat-label">Software</div></div>
+                <div class="stat-card"><div class="stat-value">{len(cve_ids)}</div><div class="stat-label">Known CVEs</div></div>
+                <div class="stat-card"><div class="stat-value" style="color:#ef4444">{kev_count}</div><div class="stat-label">Actively Exploited</div></div>
+                <div class="stat-card"><div class="stat-value">{max_cvss}</div><div class="stat-label">Max CVSS</div></div>
+                <div class="stat-card"><div class="stat-value">{avg_cvss:.1f}</div><div class="stat-label">Avg CVSS</div></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("#### 📦 Software Inventory")
+            for sw_name, sw_ver in zip(sw_names, sw_versions):
+                safe_sw = f"{sw_name}_{sw_ver}".replace(" ", "_").replace(".", "_").replace("-", "_")[:50]
+                sw_cves = surreal_query(db, f"""
+                    SELECT ->has_cve->cve.cve_id AS ids,
+                           ->has_cve->cve.cvss_score AS scores,
+                           ->has_cve->cve.is_kev AS kevs,
+                           ->has_cve->cve.description AS descs
+                    FROM software_version:⟨{safe_sw}⟩;
+                """)
+
+                sw_data = sw_cves[0] if sw_cves else {}
+                ids = _flat(sw_data.get("ids", []))
+                scores = [s for s in _flat(sw_data.get("scores", [])) if isinstance(s, (int, float))]
+                kevs = _flat(sw_data.get("kevs", []))
+                n_cves = len(ids)
+                n_kevs = sum(1 for k in kevs if k)
+
+                with st.expander(f"📦 {sw_name} v{sw_ver} — {n_cves} CVEs" + (f" · ⚠️ {n_kevs} KEV" if n_kevs > 0 else "")):
+                    if ids:
+                        descs = _flat(sw_data.get("descs", []))
+                        cve_rows = []
+                        for j, cid in enumerate(ids):
+                            sc = scores[j] if j < len(scores) else None
+                            kv = kevs[j] if j < len(kevs) else False
+                            desc = str(descs[j] if j < len(descs) else "")[:150]
+                            sev = "CRITICAL" if sc and sc >= 9 else "HIGH" if sc and sc >= 7 else "MEDIUM" if sc and sc >= 4 else "LOW"
+                            cve_rows.append({"CVE ID": cid, "CVSS": sc or "N/A", "Severity": sev, "KEV": "⚠️ YES" if kv else "No", "Description": desc})
+                        st.dataframe(pd.DataFrame(cve_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.success("No known CVEs for this software version.")
+
+            if cvss_scores:
+                st.markdown("#### 📊 CVSS Severity Distribution")
+                critical = sum(1 for s in cvss_scores if s >= 9.0)
+                high = sum(1 for s in cvss_scores if 7.0 <= s < 9.0)
+                medium = sum(1 for s in cvss_scores if 4.0 <= s < 7.0)
+                low = sum(1 for s in cvss_scores if s < 4.0)
+                dist_df = pd.DataFrame({
+                    "Severity": ["🔴 Critical (9-10)", "🟠 High (7-8.9)", "🟡 Medium (4-6.9)", "🟢 Low (0-3.9)"],
+                    "Count": [critical, high, medium, low],
+                })
+                st.bar_chart(dist_df.set_index("Severity")["Count"], color="#818cf8")
+    except Exception as e:
+        st.error(f"Error loading asset details: {e}")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 5 — ATT&CK MATRIX HEATMAP
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab5:
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(56,189,248,0.15);">⚔️</div>
+        <div>
+            <div class="section-title">MITRE ATT&CK Coverage Matrix</div>
+            <div class="section-desc">Visual breakdown of the ATT&CK kill chain — which tactics and techniques are most relevant to your environment</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-callout">
+        <strong>What is the MITRE ATT&CK Matrix?</strong> It organizes all known attack techniques by <em>tactic</em>
+        (the attacker's goal at each stage — like Initial Access, Execution, Persistence, etc.). This view shows you
+        how many techniques exist per tactic, how many threat groups use them, and highlights which areas have the highest
+        concentration of threats relevant to your software stack.
+    </div>
+    """, unsafe_allow_html=True)
+
+    try:
+        db = get_db()
+        tactics = surreal_query(db, """
+            SELECT name, external_id,
+                <-belongs_to<-technique.name AS techniques,
+                <-belongs_to<-technique.external_id AS technique_ids
+            FROM tactic ORDER BY external_id;
+        """)
+
+        if tactics:
+            st.markdown("#### 🗂️ Kill Chain Tactics")
+            tactic_data = []
+            for t in tactics:
+                tname = t.get("name", "")
+                tid = t.get("external_id", "")
+                techs = t.get("techniques", [])
+                flat_techs = []
+                if isinstance(techs, list):
+                    for item in techs:
+                        if isinstance(item, list):
+                            flat_techs.extend(item)
+                        elif item:
+                            flat_techs.append(item)
+                tactic_data.append({"name": tname, "id": tid, "count": len(flat_techs)})
+
+            max_count = max(t["count"] for t in tactic_data) if tactic_data else 1
+
+            cols = st.columns(min(len(tactic_data), 4))
+            for i, td in enumerate(tactic_data):
+                with cols[i % len(cols)]:
+                    pct = (td["count"] / max_count) * 100
+                    intensity = int(255 * (td["count"] / max_count))
+                    r = min(255, 50 + intensity)
+                    g = max(0, 180 - intensity)
+                    b = max(0, 255 - intensity // 2)
+                    st.markdown(f"""
+                    <div class="glass-card" style="text-align:center;padding:1rem;border-left:3px solid rgb({r},{g},{b});">
+                        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">{td['id']}</div>
+                        <div style="font-size:0.9rem;font-weight:600;color:var(--text-primary);margin:4px 0;">{td['name']}</div>
+                        <div style="font-size:1.5rem;font-weight:700;color:rgb({r},{g},{b});">{td['count']}</div>
+                        <div style="font-size:0.7rem;color:var(--text-muted);">techniques</div>
+                        <div style="margin-top:6px;height:4px;background:rgba(255,255,255,0.06);border-radius:2px;">
+                            <div style="height:100%;width:{pct}%;background:rgb({r},{g},{b});border-radius:2px;"></div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("#### 👤 Most Active Threat Groups")
+            top_groups = surreal_query(db, """
+                SELECT name, external_id, aliases,
+                    count(->uses->technique) AS tech_count,
+                    count(->uses->software) AS sw_count
+                FROM threat_group
+                WHERE count(->uses->technique) > 5
+                ORDER BY tech_count DESC
+                LIMIT 15;
+            """)
+            if top_groups:
+                group_rows = []
+                for g in top_groups:
+                    aliases = g.get("aliases", [])
+                    alias_str = ", ".join(aliases[:3]) if isinstance(aliases, list) else ""
+                    group_rows.append({
+                        "Group": f"{g.get('name', '')} ({g.get('external_id', '')})",
+                        "Aliases": alias_str[:50],
+                        "Techniques": g.get("tech_count", 0),
+                        "Software": g.get("sw_count", 0),
+                    })
+                st.dataframe(pd.DataFrame(group_rows), use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.markdown("#### 🛠️ Most Commonly Used Attack Software")
+            top_sw = surreal_query(db, """
+                SELECT name, external_id, sw_type, platforms,
+                    count(<-uses<-threat_group) AS group_count
+                FROM software
+                WHERE count(<-uses<-threat_group) > 3
+                ORDER BY group_count DESC
+                LIMIT 15;
+            """)
+            if top_sw:
+                sw_rows = []
+                for s in top_sw:
+                    platforms = s.get("platforms", [])
+                    plat_str = ", ".join(platforms[:3]) if isinstance(platforms, list) else ""
+                    sw_rows.append({
+                        "Software": f"{s.get('name', '')} ({s.get('external_id', '')})",
+                        "Type": s.get("sw_type", ""),
+                        "Platforms": plat_str[:40],
+                        "Used by Groups": s.get("group_count", 0),
+                    })
+                st.dataframe(pd.DataFrame(sw_rows), use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 6 — COVERAGE GAPS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 with tab6:
