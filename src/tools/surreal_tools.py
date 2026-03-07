@@ -157,33 +157,88 @@ def compute_exposure_score(db, hostname: Optional[str] = None) -> dict:
 
 
 def get_coverage_gaps(db) -> list:
-    """Find unmitigated ATT&CK techniques."""
+    """Find unmitigated ATT&CK techniques — real gap analysis."""
     query = """
     SELECT external_id, name,
         ->belongs_to->tactic.name AS tactics,
-        <-uses<-threat_group.name AS used_by
+        <-uses<-threat_group.name AS used_by,
+        <-mitigates<-mitigation.name AS mitigations,
+        <-mitigates<-mitigation.external_id AS mitigation_ids
     FROM technique
     WHERE is_subtechnique = false
-    ORDER BY name ASC
-    LIMIT 30;
+    ORDER BY name ASC;
     """
-    return surreal_query(db, query)
+    all_techs = surreal_query(db, query)
+    # Filter to only unmitigated techniques
+    gaps = []
+    for t in all_techs:
+        mits = t.get("mitigations", [])
+        flat_mits = []
+        if isinstance(mits, list):
+            for m in mits:
+                if isinstance(m, list):
+                    flat_mits.extend(m)
+                elif m:
+                    flat_mits.append(m)
+        if not flat_mits:
+            gaps.append(t)
+    return gaps[:50]  # Return top 50 unmitigated
 
 
 def search_kg(db, query_text: str) -> list:
-    """Full-text search across the KG."""
+    """Fuzzy semantic search across the KG using keyword expansion."""
     results = []
-    for table, fields in [
-        ("technique", "name"), ("threat_group", "name"),
-        ("software", "name"), ("cve", "cve_id"),
-    ]:
-        r = surreal_query(db, f"SELECT * FROM {table} WHERE {fields} CONTAINS $q LIMIT 5;", {"q": query_text})
-        if r:
-            results.extend([{**item, "_table": table} for item in r if not item.get("error")])
-    return results
+
+    # Keyword expansion for common cybersecurity terms
+    KEYWORD_MAP = {
+        "privilege escalation": ["privilege", "elevation", "escalat", "sudo", "admin", "root"],
+        "lateral movement": ["lateral", "movement", "pivot", "remote", "spread", "psexec"],
+        "persistence": ["persist", "backdoor", "startup", "registry", "scheduled", "cron"],
+        "exfiltration": ["exfiltrat", "data theft", "upload", "c2", "tunnel", "dns"],
+        "phishing": ["phish", "spear", "email", "social engineer", "attachment"],
+        "web shell": ["webshell", "web shell", "backdoor", "upload", "asp", "php", "jsp"],
+        "ransomware": ["ransom", "encrypt", "decrypt", "bitcoin", "payment"],
+        "credential": ["credential", "password", "hash", "kerberos", "ticket", "ntlm"],
+        "initial access": ["initial", "exploit", "public-facing", "drive-by", "supply chain"],
+    }
+
+    # Expand query into search terms
+    query_lower = query_text.lower()
+    search_terms = [query_text]
+
+    for concept, synonyms in KEYWORD_MAP.items():
+        if any(s in query_lower for s in [concept] + synonyms):
+            search_terms.extend(synonyms)
+
+    # Deduplicate
+    search_terms = list(set(search_terms))
+
+    # Search across multiple tables with CONTAINS (case-insensitive partial match)
+    for term in search_terms[:6]:  # Limit to avoid too many queries
+        for table, fields in [
+            ("technique", "name"),
+            ("technique", "description"),
+            ("threat_group", "name"),
+            ("software", "name"),
+            ("cve", "cve_id"),
+            ("mitigation", "name"),
+        ]:
+            r = surreal_query(db, f"SELECT * FROM {table} WHERE string::lowercase({fields}) CONTAINS string::lowercase($q) LIMIT 5;", {"q": term})
+            if r:
+                for item in r:
+                    if not item.get("error"):
+                        item["_table"] = table
+                        item["_match_term"] = term
+                        # Avoid duplicates
+                        eid = item.get("external_id", item.get("cve_id", ""))
+                        if not any(x.get("external_id", x.get("cve_id", "")) == eid and x.get("_table") == table for x in results):
+                            results.append(item)
+
+    return results[:30]  # Cap at 30
 
 
 def _flatten_nums(val):
+
     """Flatten nested list/value to list of numbers."""
     out = []
     if isinstance(val, (int, float)):

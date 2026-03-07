@@ -47,7 +47,7 @@ def _get_llm():
     from src.config import ANTHROPIC_API_KEY, OPENAI_API_KEY
     if ANTHROPIC_API_KEY:
         from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model="claude-sonnet-4-20250514", api_key=ANTHROPIC_API_KEY, max_tokens=4096)
+        return ChatAnthropic(model="claude-sonnet-4-20250514", api_key=ANTHROPIC_API_KEY, max_tokens=2048, temperature=0)
     elif OPENAI_API_KEY:
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model="gpt-4o", api_key=OPENAI_API_KEY, max_tokens=4096)
@@ -243,7 +243,7 @@ def _fallback_synthesis(state: ThreatGraphState) -> str:
 
 def _fallback_playbook(state: ThreatGraphState) -> str:
     lines = ["# Remediation Playbook\n"]
-    lines.append("## Immediate Actions\n")
+    lines.append("## 🚨 Immediate Actions\n")
     exposure = state.get("exposure_data", {})
     for a in exposure.get("assets", [])[:5]:
         if a.get("cve_count", 0) > 0:
@@ -251,21 +251,66 @@ def _fallback_playbook(state: ThreatGraphState) -> str:
             if a.get("kev_count", 0) > 0:
                 lines.append(f"  ⚠️ **{a['kev_count']} actively exploited — PATCH IMMEDIATELY**")
 
-    lines.append("\n## Detection\n")
-    lines.append("- Enable logging on all DMZ assets")
-    lines.append("- Monitor for known IoCs related to identified CVEs")
+    lines.append("\n## 🔎 Detection Rules (Sigma Format)\n")
+    lines.append("```yaml")
+    lines.append("title: Suspicious Process Execution on Critical Assets")
+    lines.append("status: experimental")
+    lines.append("description: Detects potential exploitation attempts on ThreatGraph-monitored assets")
+    lines.append("logsource:")
+    lines.append("    category: process_creation")
+    lines.append("    product: linux")
+    lines.append("detection:")
+    lines.append("    selection:")
+    lines.append("        CommandLine|contains:")
+    lines.append("            - '/etc/passwd'")
+    lines.append("            - 'curl|wget|nc '")
+    lines.append("            - '${jndi:'  # Log4Shell")
+    lines.append("    condition: selection")
+    lines.append("level: high")
+    lines.append("tags:")
+    lines.append("    - attack.initial_access")
+    lines.append("    - attack.t1190")
+    lines.append("```")
+    lines.append("")
+    lines.append("```yaml")
+    lines.append("title: Web Shell Access Detection")
+    lines.append("status: experimental")
+    lines.append("description: Detects access patterns matching web shell exploitation")
+    lines.append("logsource:")
+    lines.append("    category: webserver")
+    lines.append("    product: apache")
+    lines.append("detection:")
+    lines.append("    selection:")
+    lines.append("        cs-uri-query|contains:")
+    lines.append("            - 'cmd='")
+    lines.append("            - 'exec='")
+    lines.append("            - '..%2f..%2f'  # Path traversal")
+    lines.append("    condition: selection")
+    lines.append("level: critical")
+    lines.append("tags:")
+    lines.append("    - attack.persistence")
+    lines.append("    - attack.t1505.003")
+    lines.append("```")
 
-    lines.append("\n## Long-term\n")
-    lines.append("- Implement automated vulnerability scanning")
-    lines.append("- Establish patch management SLAs by CVSS severity")
+    lines.append("\n## 🛡️ MITRE Mitigations\n")
+    lines.append("- **M1048** Application Isolation and Sandboxing")
+    lines.append("- **M1050** Exploit Protection (ASLR, DEP, CFG)")
+    lines.append("- **M1030** Network Segmentation — isolate DMZ from internal")
+    lines.append("- **M1026** Privileged Account Management")
+
+    lines.append("\n## 📋 Long-term\n")
+    lines.append("- Implement automated vulnerability scanning (Nessus/Qualys)")
+    lines.append("- Establish patch management SLAs: KEV=24h, Critical=72h, High=7d")
+    lines.append("- Deploy WAF on all public-facing assets")
     lines.append("- Map detection capabilities to MITRE ATT&CK for gap analysis")
+    lines.append("- Enable SIEM correlation for cross-asset attack chain detection")
 
     return "\n".join(lines)
 
 
 # ─── BUILD GRAPH ──────────────────────────────────────
 
-def build_workflow():
+def build_workflow(checkpointer=None):
     """Build and compile the ThreatGraph LangGraph workflow."""
     workflow = StateGraph(ThreatGraphState)
 
@@ -285,12 +330,29 @@ def build_workflow():
     workflow.add_edge("synthesize", "playbook")
     workflow.add_edge("playbook", END)
 
-    return workflow.compile()
+    compile_kwargs = {}
+    if checkpointer:
+        compile_kwargs["checkpointer"] = checkpointer
+    return workflow.compile(**compile_kwargs)
 
 
-def run_query(query: str) -> dict:
-    """Run a query through the ThreatGraph agent (sync)."""
-    app = build_workflow()
+def run_query(query: str, thread_id: str = None) -> dict:
+    """Run a query through the ThreatGraph agent (sync).
+    
+    If thread_id is provided, uses SurrealDB checkpointing for session persistence.
+    """
+    import uuid
+
+    # Try to use SurrealDB checkpointer
+    checkpointer = None
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "toolkit"))
+        from langchain_surrealdb_mitre.checkpointer import SurrealCheckpointer
+        checkpointer = SurrealCheckpointer()
+    except Exception:
+        pass
+
+    app = build_workflow(checkpointer=checkpointer)
 
     initial = {
         "query": query,
@@ -303,7 +365,27 @@ def run_query(query: str) -> dict:
         "playbook": "",
     }
 
-    result = app.invoke(initial)
+    invoke_kwargs = {}
+    if checkpointer and thread_id:
+        invoke_kwargs["config"] = {"configurable": {"thread_id": thread_id}}
+
+    result = app.invoke(initial, **invoke_kwargs)
+
+    # Save investigation to audit trail
+    if checkpointer:
+        try:
+            checkpointer.save_investigation(
+                thread_id=thread_id or str(uuid.uuid4()),
+                query=query,
+                findings={
+                    "query_type": result["query_type"],
+                    "synthesis_preview": result["synthesis"][:500],
+                    "asset_count": len(result.get("exposure_data", {}).get("assets", [])),
+                }
+            )
+        except Exception:
+            pass
+
     return {
         "query": result["query"],
         "query_type": result["query_type"],

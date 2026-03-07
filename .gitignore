@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-data/*.json
 *.egg-info/
 dist/
 build/
