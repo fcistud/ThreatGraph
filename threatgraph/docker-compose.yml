@@ -1,0 +1,39 @@
+version: '3.8'
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command: start --log info --user root --pass root
+    ports:
+      - "8000:8000"
+    volumes:
+      - surreal_data:/data
+    healthcheck:
+      test: ["CMD", "surreal", "isready"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  threatgraph:
+    build: .
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    environment:
+      - SURREALDB_URL=ws://surrealdb:8000/rpc
+      - SURREALDB_USER=root
+      - SURREALDB_PASS=root
+      - SURREALDB_NS=threatgraph
+      - SURREALDB_DB=main
+      - NVD_API_KEY=${NVD_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGCHAIN_TRACING_V2=true
+      - LANGCHAIN_PROJECT=threatgraph
+    ports:
+      - "8501:8501"
+    command: >
+      bash -c "python3 ingest.py && streamlit run app.py --server.port 8501 --server.address 0.0.0.0"
+
+volumes:
+  surreal_data:

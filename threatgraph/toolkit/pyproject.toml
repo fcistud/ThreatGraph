@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langchain-surrealdb-mitre"
+version = "0.1.0"
+description = "LangChain integration for MITRE ATT&CK knowledge graphs on SurrealDB"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "ThreatGraph Team"},
+]
+keywords = ["langchain", "surrealdb", "mitre-attack", "cybersecurity", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+dependencies = [
+    "langchain-core>=0.3.0",
+    "langgraph>=0.5.0",
+    "surrealdb>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["langchain_surrealdb_mitre*"]

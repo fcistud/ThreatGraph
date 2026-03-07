@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/*.json
+*.egg-info/
+dist/
+build/
+.DS_Store
+surreal_data/
