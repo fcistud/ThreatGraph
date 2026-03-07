@@ -21,7 +21,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 import networkx as nx
 from pyvis.network import Network
 from src.database import get_db, validate_record_id
-from src.tools.surreal_tools import surreal_query
+from src.tools.surreal_tools import (
+    compute_asset_exposure_score,
+    get_attack_paths,
+    surreal_query,
+)
 
 
 # ─── MATRIX THEME ─────────────────────────────────────
@@ -93,6 +97,11 @@ def _risk_score(cvss, criticality_score, zone, control_effectiveness=0):
 def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=True) -> nx.DiGraph:
     """Build the full enterprise network topology graph."""
     G = nx.DiGraph()
+    bundles = {bundle["hostname"]: bundle for bundle in get_attack_paths(db)}
+    asset_scores = {
+        hostname_key: compute_asset_exposure_score(bundle)
+        for hostname_key, bundle in bundles.items()
+    }
 
     # ─── 1. ASSETS ────────────────────────────────────
     if hostname:
@@ -142,6 +151,13 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
         total_cves = len(cve_ids)
         kev_count = sum(1 for k in kev_flags if k)
         max_cvss = max((s for s in cvss_scores if isinstance(s, (int, float))), default=0)
+        bundle = bundles.get(h, {})
+        score = asset_scores.get(h, {})
+        top_cves = [row.get("cve_id") for row in bundle.get("cves", [])[:3] if row.get("cve_id")]
+        top_groups = [row.get("name") for row in bundle.get("threat_groups", [])[:3] if row.get("name")]
+        control_count = len(bundle.get("controls", []))
+        threat_vector_count = len(bundle.get("threat_vectors", []))
+        exposure_score = score.get("exposure_score", 0)
 
         is_internet_facing = zone in ("dmz", "internet")
         zone_color = ZONE_COLORS.get(zone, "#888888")
@@ -176,7 +192,12 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
                     FUNCTION: <span style='color:#FFB800;'>{biz.upper() if biz else 'N/A'}</span><br/>
                     OWNER: <span style='color:#7FB87F;'>{a.get('owner', 'N/A')}</span><br/>
                     PORTS: <span style='color:#00FFFF;'>{', '.join(str(p) for p in ports[:8])}</span><br/>
-                    SERVICES: <span style='color:#00FFFF;'>{', '.join(services[:5])}</span>
+                    SERVICES: <span style='color:#00FFFF;'>{', '.join(services[:5])}</span><br/>
+                    EXPO SCORE: <span style='color:#FFB800;'>{exposure_score}</span><br/>
+                    CONTROLS: <span style='color:#00FF41;'>{control_count}</span> |
+                    THREAT VECTORS: <span style='color:#FF3333;'>{threat_vector_count}</span><br/>
+                    TOP CVES: <span style='color:#FF6B00;'>{', '.join(top_cves) if top_cves else 'None'}</span><br/>
+                    TOP GROUPS: <span style='color:#FF00FF;'>{', '.join(top_groups) if top_groups else 'None'}</span>
                 </div>
                 <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,rgba(0,255,65,0.3),transparent);'></div>
                 <div style='color:#FFB800;font-size:11px;'>
@@ -194,6 +215,12 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
             is_crown_jewel=is_crown,
             criticality_score=crit_score,
             is_internet_facing=is_internet_facing,
+            exposure_score=exposure_score,
+            cve_count=total_cves,
+            control_count=control_count,
+            threat_vector_count=threat_vector_count,
+            top_cves=top_cves,
+            top_groups=top_groups,
         )
 
         # Software + CVE nodes (compact — only add CVEs, link SW implicitly)
@@ -411,12 +438,12 @@ def add_threat_layer(G, db):
     return G
 
 
-def find_attack_paths(G) -> list:
-    """Find shortest attack paths from internet-facing assets to crown jewels.
-    Returns list of (path, risk_score) tuples."""
+def find_attack_paths(G) -> list[dict]:
+    """Find evidence-weighted attack paths from internet-facing assets to crown jewels."""
     # Identify entry points (internet-facing assets)
     entry_points = [n for n, d in G.nodes(data=True)
-                    if d.get("group") == "asset" and d.get("is_internet_facing")]
+                    if d.get("group") == "asset" and d.get("is_internet_facing")
+                    and (d.get("cve_count", 0) > 0 or d.get("threat_vector_count", 0) > 0)]
     # Identify crown jewels
     crown_jewels = [n for n, d in G.nodes(data=True)
                     if d.get("group") == "asset" and d.get("is_crown_jewel")]
@@ -439,20 +466,41 @@ def find_attack_paths(G) -> list:
             try:
                 path = nx.shortest_path(asset_graph, entry, crown)
                 if len(path) > 1:
-                    # Calculate path risk
-                    crit = G.nodes[crown].get("criticality_score", 5)
-                    paths.append((path, crit * 10))
+                    node_scores = [G.nodes[node].get("exposure_score", 0) for node in path]
+                    cve_bonus = sum(len(G.nodes[node].get("top_cves", [])) * 25 for node in path)
+                    threat_bonus = sum(G.nodes[node].get("threat_vector_count", 0) * 20 for node in path)
+                    crown_bonus = G.nodes[crown].get("criticality_score", 5) * 25
+                    risk_score = round(sum(node_scores) + cve_bonus + threat_bonus + crown_bonus, 1)
+                    top_cves = []
+                    top_groups = []
+                    for node in path:
+                        top_cves.extend(G.nodes[node].get("top_cves", []))
+                        top_groups.extend(G.nodes[node].get("top_groups", []))
+                    paths.append(
+                        {
+                            "nodes": path,
+                            "risk": risk_score,
+                            "entry": G.nodes[entry].get("label", entry),
+                            "crown": G.nodes[crown].get("label", crown),
+                            "top_cves": list(dict.fromkeys(top_cves))[:5],
+                            "top_groups": list(dict.fromkeys(top_groups))[:5],
+                        }
+                    )
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 continue
 
     # Sort by risk (highest first)
-    paths.sort(key=lambda x: x[1], reverse=True)
+    paths.sort(key=lambda item: item["risk"], reverse=True)
     return paths
 
 
 def highlight_attack_paths(G, paths):
     """Highlight the top attack paths on the graph with glowing red edges."""
-    for path, risk in paths[:3]:  # Top 3 paths
+    for path_info in paths[:3]:  # Top 3 paths
+        path = path_info["nodes"]
+        risk = path_info["risk"]
+        top_cves = ", ".join(path_info.get("top_cves", [])) or "None"
+        top_groups = ", ".join(path_info.get("top_groups", [])) or "None"
         for i in range(len(path) - 1):
             src, dst = path[i], path[i + 1]
             # Check both directions
@@ -460,12 +508,12 @@ def highlight_attack_paths(G, paths):
                 G[src][dst]["color"] = {"color": "#FF0055", "highlight": "#FF3333"}
                 G[src][dst]["width"] = 5
                 G[src][dst]["dashes"] = False
-                G[src][dst]["title"] = f"⚠️ ATTACK PATH — risk {risk}"
+                G[src][dst]["title"] = f"⚠️ ATTACK PATH — risk {risk} — CVEs: {top_cves} — Groups: {top_groups}"
             elif G.has_edge(dst, src):
                 G[dst][src]["color"] = {"color": "#FF0055", "highlight": "#FF3333"}
                 G[dst][src]["width"] = 5
                 G[dst][src]["dashes"] = False
-                G[dst][src]["title"] = f"⚠️ ATTACK PATH — risk {risk}"
+                G[dst][src]["title"] = f"⚠️ ATTACK PATH — risk {risk} — CVEs: {top_cves} — Groups: {top_groups}"
 
 
 def _build_matrix_legend():
@@ -543,14 +591,21 @@ def _build_matrix_stats(G, paths=None):
         <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,0,85,0.3);">
             <div style="color:#FF0055;text-shadow:0 0 8px #FF0055;">⚠️ ATTACK PATHS: {len(paths)}</div>
         </div>"""
-        for i, (path, risk) in enumerate(paths[:3]):
+        for i, path_info in enumerate(paths[:3]):
+            path = path_info["nodes"]
+            risk = path_info["risk"]
             labels = []
             for n in path:
                 lbl = G.nodes[n].get("label", n).replace("🌐 ", "").replace("🔒 ", "").replace("🏢 ", "").replace(" 👑", "")
                 labels.append(lbl)
             path_str = " → ".join(labels)
             path_html += f"""<div style="color:#FF6B00;font-size:9px;margin-top:2px;">
-                {i+1}. {path_str}</div>"""
+                {i+1}. {path_str} (risk {risk})</div>"""
+            top_cves = ", ".join(path_info.get("top_cves", [])[:3])
+            top_groups = ", ".join(path_info.get("top_groups", [])[:3])
+            if top_cves or top_groups:
+                path_html += f"""<div style="color:#7FB87F;font-size:8px;margin-left:10px;">
+                    CVEs: {top_cves or 'None'} | Groups: {top_groups or 'None'}</div>"""
 
     return f"""
     <div id="graph-stats" style="
