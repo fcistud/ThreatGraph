@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 import networkx as nx
 from pyvis.network import Network
-from src.database import get_db
+from src.database import get_db, validate_record_id
 from src.tools.surreal_tools import surreal_query
 
 
@@ -99,6 +99,7 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
         assets = surreal_query(db, """
             SELECT hostname, criticality, criticality_score, os, network_zone, ip_address,
                 owner, business_function, is_crown_jewel, open_ports, services,
+                ->runs->software_version.id AS sw_ids,
                 ->runs->software_version.name AS sw_names,
                 ->runs->software_version.version AS sw_versions,
                 ->runs->software_version->has_cve->cve.cve_id AS cve_ids,
@@ -111,6 +112,7 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
         assets = surreal_query(db, """
             SELECT hostname, criticality, criticality_score, os, network_zone, ip_address,
                 owner, business_function, is_crown_jewel, open_ports, services,
+                ->runs->software_version.id AS sw_ids,
                 ->runs->software_version.name AS sw_names,
                 ->runs->software_version.version AS sw_versions,
                 ->runs->software_version->has_cve->cve.cve_id AS cve_ids,
@@ -195,8 +197,10 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
         )
 
         # Software + CVE nodes (compact — only add CVEs, link SW implicitly)
+        sw_ids = _flatten(a.get("sw_ids", []))
         sw_versions = _flatten(a.get("sw_versions", []))
-        for sw_name, sw_ver in zip(sw_names, sw_versions):
+        for idx, (sw_name, sw_ver) in enumerate(zip(sw_names, sw_versions)):
+            sw_id = sw_ids[idx] if idx < len(sw_ids) else None
             sw_node = f"sw:{sw_name}:{sw_ver}"
             if sw_node not in G.nodes:
                 G.add_node(sw_node,
@@ -215,13 +219,17 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
                 smooth={"type": "curvedCW", "roundness": 0.08})
 
             # CVEs for this SW
-            safe_sw = f"{sw_name}_{sw_ver}".replace(" ", "_").replace(".", "_").replace("-", "_")[:50]
-            sw_cves = surreal_query(db, f"""
+            if not sw_id:
+                continue
+            sw_cves = surreal_query(
+                db,
+                f"""
                 SELECT ->has_cve->cve.cve_id AS ids,
                        ->has_cve->cve.cvss_score AS scores,
                        ->has_cve->cve.is_kev AS kevs
-                FROM software_version:⟨{safe_sw}⟩;
-            """)
+                FROM {validate_record_id(sw_id)};
+                """,
+            )
             if not sw_cves:
                 continue
             sw_cve_data = sw_cves[0] if sw_cves else {}

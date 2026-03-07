@@ -906,12 +906,24 @@ with tab3:
                     c = p.get("criticality", "?")
                     crown = "👑 " if p.get("is_crown_jewel") else ""
                     st.markdown(f"**{crown}🖥️ {h}** ({c.upper()})")
-                    sw = p.get("software", [])
-                    cves = p.get("cve_ids", [])
+                    sw = [f"{row.get('name', '')} {row.get('version', '')}".strip() for row in p.get("software_versions", [])]
+                    attack_sw = [row.get("name", "") for row in p.get("attack_software", []) if row.get("name")]
+                    cves = [row.get("cve_id", "") for row in p.get("cves", []) if row.get("cve_id")]
+                    controls = [row.get("name", "") for row in p.get("controls", []) if row.get("name")]
+                    threats = [row.get("name", "") for row in p.get("threat_vectors", []) if row.get("name")]
+                    connected = p.get("connected_assets", [])
                     if sw:
-                        st.markdown(f"Software: `{sw}`")
+                        st.markdown(f"Software Versions: `{sw}`")
+                    if attack_sw:
+                        st.markdown(f"ATT&CK Software: `{attack_sw}`")
                     if cves:
                         st.markdown(f"CVEs: `{cves}`")
+                    if controls:
+                        st.markdown(f"Controls: `{controls}`")
+                    if threats:
+                        st.markdown(f"Threat Vectors: `{threats}`")
+                    if connected:
+                        st.markdown(f"Connected Assets: `{connected}`")
                     st.markdown("---")
         except Exception as e:
             st.warning(f"Error: {e}")
@@ -955,29 +967,18 @@ with tab4:
         details = get_asset_exposure(db, asset_choice)
 
         if details:
-            a = details[0]
+            a = details
             crit = a.get("criticality", "medium")
             crit_score = a.get("criticality_score", 5.0) or 5.0
             is_crown = a.get("is_crown_jewel", False)
 
-            def _flat(val):
-                out = []
-                if not isinstance(val, list):
-                    return [val] if val else []
-                for v in val:
-                    if isinstance(v, list):
-                        out.extend(_flat(v))
-                    elif v is not None:
-                        out.append(v)
-                return out
-
-            sw_names = _flat(a.get("software", []))
-            sw_versions = _flat(a.get("versions", []))
-            cve_ids = _flat(a.get("cves", []))
-            cvss_scores = [s for s in _flat(a.get("cvss_scores", [])) if isinstance(s, (int, float))]
-            kev_flags = _flat(a.get("actively_exploited", []))
-            controls = _flat(a.get("controls", []))
-            threats = _flat(a.get("threats", []))
+            software_versions = a.get("software_versions", [])
+            cve_rows = a.get("cves", [])
+            controls = [row.get("name", "") for row in a.get("controls", []) if row.get("name")]
+            threats = [row.get("name", "") for row in a.get("threat_vectors", []) if row.get("name")]
+            cve_ids = [row.get("cve_id") for row in cve_rows if row.get("cve_id")]
+            cvss_scores = [row.get("cvss_score") for row in cve_rows if isinstance(row.get("cvss_score"), (int, float))]
+            kev_flags = [row.get("is_kev") for row in cve_rows]
 
             kev_count = sum(1 for k in kev_flags if k)
             max_cvss = max(cvss_scores) if cvss_scores else 0
@@ -1016,8 +1017,8 @@ with tab4:
             """, unsafe_allow_html=True)
 
             st.markdown(f"""
-            <div class="stat-grid">
-                <div class="stat-card"><div class="stat-value">{len(sw_names)}</div><div class="stat-label">Software</div></div>
+                <div class="stat-grid">
+                <div class="stat-card"><div class="stat-value">{len(software_versions)}</div><div class="stat-label">Software</div></div>
                 <div class="stat-card"><div class="stat-value">{len(cve_ids)}</div><div class="stat-label">Known CVEs</div></div>
                 <div class="stat-card"><div class="stat-value" style="color:#ef4444">{kev_count}</div><div class="stat-label">Actively Exploited</div></div>
                 <div class="stat-card"><div class="stat-value">{max_cvss}</div><div class="stat-label">Max CVSS</div></div>
@@ -1026,34 +1027,35 @@ with tab4:
             """, unsafe_allow_html=True)
 
             st.markdown("#### 📦 Software Inventory")
-            for sw_name, sw_ver in zip(sw_names, sw_versions):
-                safe_sw = f"{sw_name}_{sw_ver}".replace(" ", "_").replace(".", "_").replace("-", "_")[:50]
-                sw_cves = surreal_query(db, f"""
-                    SELECT ->has_cve->cve.cve_id AS ids,
-                           ->has_cve->cve.cvss_score AS scores,
-                           ->has_cve->cve.is_kev AS kevs,
-                           ->has_cve->cve.description AS descs
-                    FROM software_version:⟨{safe_sw}⟩;
-                """)
+            cve_lookup = {row.get("cve_id"): row for row in cve_rows if row.get("cve_id")}
+            for software in software_versions:
+                sw_name = software.get("name", "")
+                sw_ver = software.get("version", "")
+                sw_id = software.get("id", "")
+                software_cve_ids = sorted(
+                    {
+                        path.get("cve_id")
+                        for path in a.get("evidence_paths", [])
+                        if path.get("software_version_id") == sw_id and path.get("cve_id")
+                    }
+                )
+                software_cves = [cve_lookup[cid] for cid in software_cve_ids if cid in cve_lookup]
+                n_kevs = sum(1 for row in software_cves if row.get("is_kev"))
 
-                sw_data = sw_cves[0] if sw_cves else {}
-                ids = _flat(sw_data.get("ids", []))
-                scores = [s for s in _flat(sw_data.get("scores", [])) if isinstance(s, (int, float))]
-                kevs = _flat(sw_data.get("kevs", []))
-                n_cves = len(ids)
-                n_kevs = sum(1 for k in kevs if k)
-
-                with st.expander(f"📦 {sw_name} v{sw_ver} — {n_cves} CVEs" + (f" · ⚠️ {n_kevs} KEV" if n_kevs > 0 else "")):
-                    if ids:
-                        descs = _flat(sw_data.get("descs", []))
-                        cve_rows = []
-                        for j, cid in enumerate(ids):
-                            sc = scores[j] if j < len(scores) else None
-                            kv = kevs[j] if j < len(kevs) else False
-                            desc = str(descs[j] if j < len(descs) else "")[:150]
+                with st.expander(f"📦 {sw_name} v{sw_ver} — {len(software_cves)} CVEs" + (f" · ⚠️ {n_kevs} KEV" if n_kevs > 0 else "")):
+                    if software_cves:
+                        table_rows = []
+                        for row in software_cves:
+                            sc = row.get("cvss_score")
                             sev = "CRITICAL" if sc and sc >= 9 else "HIGH" if sc and sc >= 7 else "MEDIUM" if sc and sc >= 4 else "LOW"
-                            cve_rows.append({"CVE ID": cid, "CVSS": sc or "N/A", "Severity": sev, "KEV": "⚠️ YES" if kv else "No", "Description": desc})
-                        st.dataframe(pd.DataFrame(cve_rows), use_container_width=True, hide_index=True)
+                            table_rows.append({
+                                "CVE ID": row.get("cve_id"),
+                                "CVSS": sc or "N/A",
+                                "Severity": sev,
+                                "KEV": "⚠️ YES" if row.get("is_kev") else "No",
+                                "Description": str(row.get("description", ""))[:150],
+                            })
+                        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
                     else:
                         st.success("No known CVEs for this software version.")
 
@@ -1148,7 +1150,7 @@ with tab5:
             top_groups = surreal_query(db, """
                 SELECT name, external_id, aliases,
                     count(->uses->technique) AS tech_count,
-                    count(->uses->software) AS sw_count
+                    count(->employs->software) AS sw_count
                 FROM threat_group
                 WHERE count(->uses->technique) > 5
                 ORDER BY tech_count DESC
@@ -1171,9 +1173,9 @@ with tab5:
             st.markdown("#### 🛠️ Most Commonly Used Attack Software")
             top_sw = surreal_query(db, """
                 SELECT name, external_id, sw_type, platforms,
-                    count(<-uses<-threat_group) AS group_count
+                    count(<-employs<-threat_group) AS group_count
                 FROM software
-                WHERE count(<-uses<-threat_group) > 3
+                WHERE count(<-employs<-threat_group) > 3
                 ORDER BY group_count DESC
                 LIMIT 15;
             """)

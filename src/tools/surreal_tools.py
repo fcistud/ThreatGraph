@@ -80,12 +80,15 @@ def _load_evidence_snapshot(db) -> dict:
                 id,
                 hostname,
                 os,
+                ip_address,
                 network_zone,
                 criticality,
                 criticality_score,
+                business_function,
                 is_crown_jewel,
                 open_ports,
                 services,
+                owner,
                 ->resides_in->network_segment.id AS segment_ids,
                 ->resides_in->network_segment.name AS segment_names,
                 ->connects_to->asset.hostname AS outbound_connections,
@@ -333,12 +336,16 @@ def _build_asset_evidence_bundle(snapshot: dict, hostname: str) -> dict:
 
     return {
         "hostname": asset.get("hostname", hostname),
+        "os": asset.get("os", ""),
+        "ip_address": asset.get("ip_address"),
         "criticality": asset.get("criticality", "medium"),
         "criticality_score": asset.get("criticality_score", 5.0),
         "network_zone": asset.get("network_zone", "internal"),
+        "business_function": asset.get("business_function"),
         "is_crown_jewel": asset.get("is_crown_jewel", False),
         "open_ports": asset.get("open_ports", []),
         "services": asset.get("services", []),
+        "owner": asset.get("owner"),
         "network_segments": _flatten_strings(asset.get("segment_names", [])),
         "connected_assets": sorted(
             set(_flatten_strings(asset.get("outbound_connections", [])))
