@@ -1,4 +1,12 @@
-"""ThreatGraph Streamlit Dashboard — AI-powered cybersecurity analyst (sync)."""
+"""ThreatGraph — Premium Cybersecurity Dashboard.
+
+A polished, beginner-friendly Streamlit dashboard with:
+- Glassmorphism dark theme with animated gradient accents
+- Contextual help tooltips and explanations throughout
+- Guided onboarding for cybersecurity beginners
+- Risk severity badges, gauge charts, heat maps
+- Interactive graph visualization
+"""
 
 import json
 import sys
@@ -7,37 +15,416 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 import streamlit as st
+import pandas as pd
 
 from src.database import get_db, get_stats
 from src.agents.workflow import run_query
 from src.tools.surreal_tools import (
-    get_attack_paths, compute_exposure_score, get_coverage_gaps, search_kg
+    get_attack_paths, compute_exposure_score, get_coverage_gaps, search_kg, surreal_query
 )
-
 
 # ─── PAGE CONFIG ──────────────────────────────────────
 
-st.set_page_config(page_title="ThreatGraph", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="ThreatGraph — AI Cybersecurity Analyst",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# ─── CUSTOM CSS ───────────────────────────────────────
+# ─── PREMIUM CSS ──────────────────────────────────────
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-    .stApp { font-family: 'Inter', sans-serif; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-    .main-header {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
-        padding: 2rem; border-radius: 16px; margin-bottom: 2rem;
-        border: 1px solid rgba(56, 189, 248, 0.2);
-        box-shadow: 0 0 30px rgba(56, 189, 248, 0.1);
-    }
-    .main-header h1 {
-        background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        font-size: 2.5rem; font-weight: 700; margin: 0;
-    }
-    .main-header p { color: #94a3b8; font-size: 1.1rem; margin-top: 0.5rem; }
+/* ── Master Theme ───────────────────────────────── */
+:root {
+    --bg-primary: #0b0f19;
+    --bg-secondary: #111827;
+    --bg-card: rgba(17, 24, 39, 0.7);
+    --bg-glass: rgba(30, 41, 59, 0.45);
+    --border-subtle: rgba(99, 102, 241, 0.15);
+    --border-glow: rgba(99, 102, 241, 0.35);
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-blue: #38bdf8;
+    --accent-indigo: #818cf8;
+    --accent-violet: #a78bfa;
+    --accent-emerald: #34d399;
+    --accent-amber: #fbbf24;
+    --accent-rose: #fb7185;
+    --severity-critical: #ef4444;
+    --severity-high: #f97316;
+    --severity-medium: #eab308;
+    --severity-low: #22c55e;
+    --severity-info: #38bdf8;
+}
+
+.stApp {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg-primary) !important;
+    color: var(--text-primary);
+}
+
+/* Hide default Streamlit elements */
+#MainMenu, footer, header { visibility: hidden; }
+.stDeployButton { display: none; }
+
+/* ── Hero Header ────────────────────────────────── */
+.hero-header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #0f172a 70%, #172554 100%);
+    border: 1px solid var(--border-subtle);
+    border-radius: 20px;
+    padding: 2rem 2.5rem;
+    margin-bottom: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 4px 30px rgba(99, 102, 241, 0.08);
+}
+.hero-header::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 30% 50%, rgba(56, 189, 248, 0.06) 0%, transparent 50%),
+                radial-gradient(circle at 70% 50%, rgba(139, 92, 246, 0.06) 0%, transparent 50%);
+    animation: shimmer 8s ease-in-out infinite;
+}
+@keyframes shimmer {
+    0%, 100% { transform: translate(0, 0); }
+    50% { transform: translate(-5%, 5%); }
+}
+.hero-title {
+    font-size: 2.2rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #38bdf8, #818cf8, #c084fc, #38bdf8);
+    background-size: 300% 300%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradient-shift 6s ease infinite;
+    margin: 0;
+    position: relative;
+    z-index: 1;
+}
+@keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+.hero-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    margin-top: 0.4rem;
+    position: relative;
+    z-index: 1;
+    font-weight: 400;
+    letter-spacing: 0.3px;
+}
+.hero-badges {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
+}
+.hero-badge {
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: 100px;
+    padding: 0.3rem 0.9rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    backdrop-filter: blur(10px);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+/* ── Glass Cards ────────────────────────────────── */
+.glass-card {
+    background: var(--bg-glass);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-subtle);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.glass-card:hover {
+    border-color: var(--border-glow);
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.06);
+}
+.glass-card h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 0.75rem 0;
+}
+.glass-card p {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.6;
+}
+
+/* ── Stat Cards ─────────────────────────────────── */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.8rem;
+    margin-bottom: 1rem;
+}
+.stat-card {
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border-subtle);
+    border-radius: 14px;
+    padding: 1rem 1.2rem;
+    text-align: center;
+    transition: transform 0.2s ease, border-color 0.3s ease;
+}
+.stat-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-glow);
+}
+.stat-value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-indigo));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.stat-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+/* ── Risk Badge ─────────────────────────────────── */
+.risk-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.7rem;
+    border-radius: 100px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.risk-critical { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+.risk-high { background: rgba(249, 115, 22, 0.15); color: #f97316; border: 1px solid rgba(249, 115, 22, 0.3); }
+.risk-medium { background: rgba(234, 179, 8, 0.15); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.3); }
+.risk-low { background: rgba(34, 197, 94, 0.15); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3); }
+
+/* ── Exposure Bar ───────────────────────────────── */
+.exposure-row {
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.6rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    transition: border-color 0.3s ease;
+}
+.exposure-row:hover { border-color: var(--border-glow); }
+.exposure-hostname {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    min-width: 140px;
+}
+.exposure-bar-track {
+    flex: 1;
+    height: 8px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 100px;
+    overflow: hidden;
+}
+.exposure-bar-fill {
+    height: 100%;
+    border-radius: 100px;
+    transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.exposure-score {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    font-size: 0.95rem;
+    min-width: 60px;
+    text-align: right;
+}
+.exposure-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    min-width: 120px;
+}
+
+/* ── Info Callout ───────────────────────────────── */
+.info-callout {
+    background: rgba(56, 189, 248, 0.06);
+    border: 1px solid rgba(56, 189, 248, 0.15);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 0 12px 12px 0;
+    padding: 0.8rem 1.2rem;
+    margin: 0.8rem 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+.info-callout strong { color: var(--accent-blue); }
+
+.warn-callout {
+    background: rgba(249, 115, 22, 0.06);
+    border: 1px solid rgba(249, 115, 22, 0.15);
+    border-left: 3px solid var(--severity-high);
+    border-radius: 0 12px 12px 0;
+    padding: 0.8rem 1.2rem;
+    margin: 0.8rem 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+.warn-callout strong { color: var(--severity-high); }
+
+/* ── Section Headers ────────────────────────────── */
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.8rem;
+}
+.section-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+}
+.section-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.section-desc {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+/* ── Sidebar ────────────────────────────────────── */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0f172a, #1e1b4b) !important;
+    border-right: 1px solid var(--border-subtle);
+}
+section[data-testid="stSidebar"] .stMarkdown { color: var(--text-secondary); }
+section[data-testid="stSidebar"] hr { border-color: var(--border-subtle); }
+
+/* ── Tabs ───────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0.3rem;
+    background: var(--bg-glass);
+    border-radius: 14px;
+    padding: 0.3rem;
+    border: 1px solid var(--border-subtle);
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 10px;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.15)) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-glow) !important;
+}
+
+/* ── Buttons ────────────────────────────────────── */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.3px;
+    transition: transform 0.2s ease, box-shadow 0.3s ease !important;
+}
+.stButton > button[kind="primary"]:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3) !important;
+}
+
+/* ── Text Input ─────────────────────────────────── */
+.stTextInput > div > div > input {
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: 12px !important;
+    color: var(--text-primary) !important;
+    font-family: 'Inter', sans-serif !important;
+    padding: 0.7rem 1rem !important;
+}
+.stTextInput > div > div > input:focus {
+    border-color: var(--accent-indigo) !important;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15) !important;
+}
+
+/* ── Expanders ──────────────────────────────────── */
+.streamlit-expanderHeader {
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: 12px !important;
+    font-weight: 500;
+}
+
+/* ── Metrics ────────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: 14px;
+    padding: 1rem;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+}
+
+/* ── Glossary Tooltip ───────────────────────────── */
+.glossary-term {
+    border-bottom: 1px dashed var(--accent-blue);
+    cursor: help;
+    color: var(--accent-blue);
+    font-weight: 500;
+}
+
+/* ── Animations ─────────────────────────────────── */
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fadeInUp 0.5s ease-out forwards; }
+
+/* ── Scrollbar ──────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-glow); }
+
+/* ── Selectbox ──────────────────────────────────── */
+.stSelectbox > div > div {
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: 12px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,210 +440,467 @@ def cached_stats():
         return {}
 
 
-def fetch_exposure():
-    db = get_db()
-    return compute_exposure_score(db)
+def _risk_class(score):
+    if score > 100:
+        return "critical"
+    if score > 50:
+        return "high"
+    if score > 25:
+        return "medium"
+    return "low"
 
 
-def fetch_attack_paths():
-    db = get_db()
-    return get_attack_paths(db)
+def _risk_label(score):
+    if score > 100:
+        return "🔴 CRITICAL"
+    if score > 50:
+        return "🟠 HIGH"
+    if score > 25:
+        return "🟡 MEDIUM"
+    return "🟢 LOW"
 
 
-def fetch_coverage_gaps():
-    db = get_db()
-    return get_coverage_gaps(db)
+def _bar_color(cls):
+    return {
+        "critical": "linear-gradient(90deg, #ef4444, #dc2626)",
+        "high": "linear-gradient(90deg, #f97316, #ea580c)",
+        "medium": "linear-gradient(90deg, #eab308, #ca8a04)",
+        "low": "linear-gradient(90deg, #22c55e, #16a34a)",
+    }.get(cls, "linear-gradient(90deg, #64748b, #475569)")
 
 
-# ─── HEADER ───────────────────────────────────────────
+# ─── HERO HEADER ──────────────────────────────────────
 
 st.markdown("""
-<div class="main-header">
-    <h1>🛡️ ThreatGraph</h1>
-    <p>AI-powered cybersecurity analyst • MITRE ATT&CK knowledge graph • Real-time exposure assessment</p>
+<div class="hero-header">
+    <h1 class="hero-title">🛡️ ThreatGraph</h1>
+    <p class="hero-subtitle">AI-powered cybersecurity analyst — powered by MITRE ATT&CK knowledge graph, real-time CVE correlation, and agentic reasoning</p>
+    <div class="hero-badges">
+        <span class="hero-badge">🧠 LangGraph Agent</span>
+        <span class="hero-badge">🗄️ SurrealDB Knowledge Graph</span>
+        <span class="hero-badge">📡 NVD / CISA KEV</span>
+        <span class="hero-badge">⚡ Real-time Analysis</span>
+    </div>
 </div>
 """, unsafe_allow_html=True)
-
 
 # ─── SIDEBAR ─────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("### 📊 Knowledge Graph Stats")
+    st.markdown("## 📊 Knowledge Graph")
     try:
         stats = cached_stats()
         node_tables = ["technique", "tactic", "threat_group", "software", "mitigation", "asset", "cve"]
         total_nodes = sum(stats.get(t, 0) for t in node_tables)
-        total_edges = sum(stats.get(t, 0) for t in ["uses", "belongs_to", "employs", "mitigates", "runs", "has_cve", "affects"])
+        edge_tables = ["uses", "belongs_to", "employs", "mitigates", "runs", "has_cve", "affects", "subtechnique_of"]
+        total_edges = sum(stats.get(t, 0) for t in edge_tables)
 
-        col1, col2 = st.columns(2)
-        col1.metric("Nodes", f"{total_nodes:,}")
-        col2.metric("Edges", f"{total_edges:,}")
+        st.markdown(f"""
+        <div class="stat-grid">
+            <div class="stat-card"><div class="stat-value">{total_nodes:,}</div><div class="stat-label">Nodes</div></div>
+            <div class="stat-card"><div class="stat-value">{total_edges:,}</div><div class="stat-label">Edges</div></div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        st.markdown("#### Detail")
-        for t in node_tables:
-            c = stats.get(t, 0)
-            if c > 0:
-                st.markdown(f"- **{t}**: {c:,}")
+        detail_items = "".join([
+            f'<div style="display:flex;justify-content:space-between;padding:0.25rem 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
+            f'<span style="color:var(--text-muted);font-size:0.8rem;">{t.replace("_"," ").title()}</span>'
+            f'<span style="color:var(--text-primary);font-weight:600;font-size:0.8rem;font-family:JetBrains Mono,monospace;">{stats.get(t,0):,}</span></div>'
+            for t in node_tables if stats.get(t, 0) > 0
+        ])
+        st.markdown(f'<div class="glass-card" style="padding:1rem;">{detail_items}</div>', unsafe_allow_html=True)
     except Exception as e:
-        st.error(f"DB error: {e}")
+        st.error(f"DB: {e}")
 
     st.markdown("---")
-    st.markdown("### 🎯 Try These")
+    st.markdown("## 🎯 Quick Queries")
+    st.markdown('<div class="info-callout">Click any query below to auto-fill the analyst. These showcase different capabilities.</div>', unsafe_allow_html=True)
+
     examples = [
-        "What's my biggest risk right now?",
-        "Am I vulnerable to APT29?",
-        "Show me coverage gaps",
-        "Tell me about web-server-01",
+        ("What's my biggest risk?", "🔥"),
+        ("Am I vulnerable to APT29?", "👤"),
+        ("Show me coverage gaps", "🛡️"),
+        ("Tell me about web-server-01", "🖥️"),
     ]
-    for ex in examples:
-        if st.button(ex, key=f"ex_{hash(ex)}"):
-            st.session_state["q"] = ex
+    for ex_text, icon in examples:
+        if st.button(f"{icon} {ex_text}", key=f"ex_{hash(ex_text)}", use_container_width=True):
+            st.session_state["q"] = ex_text
+
+    st.markdown("---")
+
+    # Glossary
+    with st.expander("📖 Cybersecurity Glossary"):
+        glossary = {
+            "MITRE ATT&CK": "A knowledge base of real-world adversary tactics and techniques. Think of it as a catalog of *how hackers actually attack*.",
+            "CVE": "Common Vulnerabilities and Exposures — a unique ID for a publicly known security flaw (e.g., CVE-2021-44228 is Log4Shell).",
+            "CVSS": "Common Vulnerability Scoring System — rates how dangerous a vulnerability is from 0.0 (harmless) to 10.0 (catastrophic).",
+            "CISA KEV": "CISA's Known Exploited Vulnerabilities catalog — CVEs that are *actively being used by attackers right now*. Highest urgency.",
+            "Technique": "A specific method an attacker uses (e.g., T1059 = Command Line execution). There are 691 catalogued techniques.",
+            "Threat Group": "A named hacker group (e.g., APT29 = Russia's SVR intelligence). There are 172 tracked groups.",
+            "Exposure Score": "ThreatGraph's custom metric combining CVSS severity × asset criticality × KEV status. Higher = more urgent.",
+            "Attack Path": "The chain: Asset → Software → CVE → Technique → Threat Group. Shows *how* an attacker could reach your systems.",
+            "CPE": "Common Platform Enumeration — a standardized way to name software products and versions for vulnerability matching.",
+            "Kill Chain": "The stages of an attack: Reconnaissance → Initial Access → Execution → ... → Impact. Maps to ATT&CK tactics.",
+        }
+        for term, definition in glossary.items():
+            st.markdown(f"**{term}**")
+            st.caption(definition)
 
 
 # ─── MAIN TABS ───────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Query", "📊 Exposure", "🔗 Paths", "🛡️ Gaps", "💻 Code"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "🔍 Analyst", "📊 Exposure", "🔗 Attack Graph", "🖥️ Asset Intel",
+    "⚔️ ATT&CK Matrix", "🛡️ Gaps", "💻 Code", "📚 Guide"
+])
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 1 — AI ANALYST
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 with tab1:
-    st.markdown("### Ask ThreatGraph")
-    q = st.text_input("Security question:", value=st.session_state.get("q", ""),
-                       placeholder="e.g., Am I vulnerable to APT29?", key="qbox")
-    if st.button("🔍 Analyze", type="primary") and q:
-        with st.spinner("Analyzing..."):
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(99,102,241,0.15);">🔍</div>
+        <div>
+            <div class="section-title">AI Security Analyst</div>
+            <div class="section-desc">Ask any cybersecurity question — the agent queries the knowledge graph and generates a threat assessment with remediation playbook</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-callout">
+        <strong>How it works:</strong> Your question is classified → routed to the right tools → the knowledge graph is queried 
+        for matching techniques, CVEs, and assets → results are synthesized into an actionable report with a remediation playbook.
+    </div>
+    """, unsafe_allow_html=True)
+
+    q = st.text_input("", value=st.session_state.get("q", ""),
+                       placeholder="e.g., Am I vulnerable to APT29? / What's my biggest risk? / Tell me about CVE-2021-44228",
+                       label_visibility="collapsed", key="qbox")
+
+    col_btn, col_info = st.columns([1, 3])
+    with col_btn:
+        analyze = st.button("🔍 Analyze", type="primary", use_container_width=True)
+
+    if analyze and q:
+        with st.spinner("🧠 Agent is reasoning over the knowledge graph..."):
             try:
                 result = run_query(q)
-                st.markdown(f"**Type**: `{result['query_type']}`")
+
+                # Query type badge
+                type_colors = {
+                    "exposure_check": ("📊", "Exposure Analysis", "#f97316"),
+                    "threat_hunt": ("👤", "Threat Hunt", "#c084fc"),
+                    "cve_alert": ("🚨", "CVE Alert", "#ef4444"),
+                    "coverage_gap": ("🛡️", "Coverage Gap", "#22c55e"),
+                    "general": ("🔍", "General Query", "#38bdf8"),
+                }
+                icon, label, color = type_colors.get(result['query_type'], ("🔍", "General", "#38bdf8"))
+                st.markdown(f'<span style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.3);'
+                           f'border-radius:100px;padding:0.3rem 1rem;font-size:0.8rem;color:{color};font-weight:600;">'
+                           f'{icon} {label}</span>', unsafe_allow_html=True)
+
                 st.markdown("---")
-                st.markdown("### 📋 Assessment")
+
+                # Threat Assessment
+                st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(56,189,248,0.15);">📋</div>
+                <div><div class="section-title">Threat Assessment</div></div></div>""", unsafe_allow_html=True)
                 st.markdown(result["synthesis"])
-                st.markdown("---")
-                st.markdown("### 🔧 Playbook")
+
+                # Playbook
+                st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(52,211,153,0.15);">🔧</div>
+                <div><div class="section-title">Remediation Playbook</div></div></div>""", unsafe_allow_html=True)
                 st.markdown(result["playbook"])
 
+                # Exposure chart
                 exp = result.get("exposure_data", {})
                 if exp and exp.get("assets"):
                     st.markdown("---")
-                    st.markdown("### 📊 Scores")
-                    import pandas as pd
-                    df = pd.DataFrame(exp["assets"])
-                    if not df.empty:
-                        st.dataframe(df, use_container_width=True)
+                    st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(251,191,36,0.15);">📊</div>
+                    <div><div class="section-title">Exposure Scores</div></div></div>""", unsafe_allow_html=True)
+
+                    for a in exp["assets"]:
+                        cls = _risk_class(a["exposure_score"])
+                        max_score = max(a["exposure_score"] for a in exp["assets"])
+                        pct = min((a["exposure_score"] / max_score) * 100, 100) if max_score > 0 else 0
+                        kev_warn = f' · <span style="color:#ef4444;font-weight:600;">⚠️ {a["kev_count"]} actively exploited</span>' if a.get("kev_count", 0) > 0 else ""
+                        st.markdown(f"""
+                        <div class="exposure-row">
+                            <span class="exposure-hostname">{a['hostname']}</span>
+                            <span class="risk-badge risk-{cls}">{_risk_label(a['exposure_score'])}</span>
+                            <div class="exposure-bar-track"><div class="exposure-bar-fill" style="width:{pct}%;background:{_bar_color(cls)}"></div></div>
+                            <span class="exposure-score" style="color:var(--severity-{cls})">{a['exposure_score']:.0f}</span>
+                            <span class="exposure-meta">{a['cve_count']} CVEs · CVSS {a['max_cvss']}{kev_warn}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
             except Exception as e:
                 st.error(f"Error: {e}")
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 2 — EXPOSURE DASHBOARD
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 with tab2:
-    st.markdown("### Exposure Dashboard")
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(249,115,22,0.15);">📊</div>
+        <div>
+            <div class="section-title">Exposure Dashboard</div>
+            <div class="section-desc">Real-time vulnerability exposure across all monitored assets</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-callout">
+        <strong>What is an exposure score?</strong> It combines three factors: (1) the total CVSS severity of all CVEs on an asset, 
+        (2) a multiplier based on asset criticality (critical=4×, high=3×, medium=2×), and (3) a +20 bonus per CVE that's in 
+        CISA's Known Exploited Vulnerabilities list (meaning attackers are <em>actively using it right now</em>).
+    </div>
+    """, unsafe_allow_html=True)
+
     try:
-        exp = fetch_exposure()
+        db = get_db()
+        exp = compute_exposure_score(db)
         if exp and exp.get("assets"):
-            import pandas as pd
-            st.metric("Total Score", f"{exp['total_score']:.0f}")
+            # Top-level metrics
+            st.markdown(f"""
+            <div class="stat-grid">
+                <div class="stat-card"><div class="stat-value">{exp['total_score']:.0f}</div><div class="stat-label">Total Score</div></div>
+                <div class="stat-card"><div class="stat-value">{len(exp['assets'])}</div><div class="stat-label">Assets</div></div>
+                <div class="stat-card"><div class="stat-value">{sum(a['cve_count'] for a in exp['assets'])}</div><div class="stat-label">Total CVEs</div></div>
+                <div class="stat-card"><div class="stat-value">{sum(a.get('kev_count',0) for a in exp['assets'])}</div><div class="stat-label">Actively Exploited</div></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Per-asset rows
+            for a in exp["assets"]:
+                cls = _risk_class(a["exposure_score"])
+                max_score = max(a["exposure_score"] for a in exp["assets"])
+                pct = min((a["exposure_score"] / max_score) * 100, 100) if max_score > 0 else 0
+                kev_warn = f' · <span style="color:#ef4444;font-weight:600;">⚠️ {a["kev_count"]} actively exploited</span>' if a.get("kev_count", 0) > 0 else ""
+                st.markdown(f"""
+                <div class="exposure-row">
+                    <span class="exposure-hostname">{a['hostname']}</span>
+                    <span class="risk-badge risk-{cls}">{_risk_label(a['exposure_score'])}</span>
+                    <div class="exposure-bar-track"><div class="exposure-bar-fill" style="width:{pct}%;background:{_bar_color(cls)}"></div></div>
+                    <span class="exposure-score" style="color:var(--severity-{cls})">{a['exposure_score']:.0f}</span>
+                    <span class="exposure-meta">{a['cve_count']} CVEs · CVSS {a['max_cvss']}{kev_warn}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # Bar chart
+            st.markdown("### Score Distribution")
             df = pd.DataFrame(exp["assets"])
-            if not df.empty:
-                st.dataframe(df, use_container_width=True)
-                st.bar_chart(df.set_index("hostname")["exposure_score"])
+            st.bar_chart(df.set_index("hostname")["exposure_score"], color="#818cf8")
+
         else:
-            st.info("No exposure data. Run `python3 ingest.py` first.")
+            st.info("No exposure data yet. Run `python3 ingest.py` to populate the knowledge graph.")
     except Exception as e:
         st.warning(f"Error: {e}")
 
-with tab3:
-    st.markdown("### Attack Path Visualization")
 
-    # Controls
-    col_a, col_b = st.columns([2, 1])
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 3 — ATTACK GRAPH
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab3:
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(56,189,248,0.15);">🔗</div>
+        <div>
+            <div class="section-title">Attack Path Graph</div>
+            <div class="section-desc">Interactive visualization of how attackers can reach your assets through known vulnerabilities</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-callout">
+        <strong>Reading the graph:</strong> 🖥️ <strong>Orange boxes</strong> = your assets (servers). 
+        💎 <strong>Purple diamonds</strong> = software versions running on them. 
+        🔺 <strong>Red/orange triangles</strong> = CVEs (vulnerabilities). 
+        Brighter red = higher CVSS = more dangerous. 
+        ⭐ <strong>Purple stars</strong> = threat groups (when enabled). 
+        <em>Drag nodes to rearrange. Hover for details.</em>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_a, col_b = st.columns([3, 1])
     with col_a:
-        filter_host = st.selectbox("Filter by asset:", ["All"] + [
+        filter_host = st.selectbox("🖥️ Filter by asset", ["All Assets"] + [
             "web-server-01", "db-server-01", "api-server-01", "mail-server-01", "dev-workstation-01"
-        ])
+        ], help="Select a specific asset to focus the graph, or view all connections at once.")
     with col_b:
-        include_groups = st.checkbox("Include threat groups", value=False)
+        include_groups = st.checkbox("Show threat groups", value=False,
+                                     help="Adds known APT groups and the techniques they use to the graph. Makes it busier but shows attribution.")
 
     try:
         from src.tools.graph_viz import generate_attack_path_viz
-        hostname_filter = None if filter_host == "All" else filter_host
+        hostname_filter = None if filter_host == "All Assets" else filter_host
         html = generate_attack_path_viz(hostname=hostname_filter, include_groups=include_groups)
         import streamlit.components.v1 as components
-        components.html(html, height=650, scrolling=True)
+        components.html(html, height=600, scrolling=False)
     except Exception as e:
-        st.warning(f"Graph error: {e}")
+        st.warning(f"Graph visualization error: {e}")
 
-    # Also show data table
-    st.markdown("---")
-    st.markdown("### Attack Path Data")
-    try:
-        paths = fetch_attack_paths()
-        if paths:
-            for p in paths[:10]:
-                h = p.get("hostname", "?")
-                c = p.get("criticality", "?")
-                with st.expander(f"🖥️ {h} ({c.upper()})"):
+    # Attack path data
+    with st.expander("📋 Detailed Attack Path Data"):
+        try:
+            db = get_db()
+            paths = get_attack_paths(db)
+            if paths:
+                for p in paths:
+                    h = p.get("hostname", "?")
+                    c = p.get("criticality", "?")
+                    st.markdown(f"**🖥️ {h}** ({c.upper()})")
                     sw = p.get("software", [])
                     cves = p.get("cve_ids", [])
-                    st.markdown(f"**Software**: {sw}")
+                    if sw:
+                        st.markdown(f"Software: `{sw}`")
                     if cves:
-                        st.markdown(f"**CVEs**: {cves}")
-    except Exception as e:
-        st.warning(f"Error: {e}")
+                        st.markdown(f"CVEs: `{cves}`")
+                    st.markdown("---")
+        except Exception as e:
+            st.warning(f"Error: {e}")
 
-with tab4:
-    st.markdown("### Coverage Gaps")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 4 — COVERAGE GAPS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab6:
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(52,211,153,0.15);">🛡️</div>
+        <div>
+            <div class="section-title">Detection Coverage Gaps</div>
+            <div class="section-desc">ATT&CK techniques that your assets are exposed to but have no mitigations mapped</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="warn-callout">
+        <strong>Why this matters:</strong> These are techniques that known threat groups actually use against software running on your assets, 
+        but your organization has no documented mitigation for them. Each gap is a potential blind spot in your defenses.
+    </div>
+    """, unsafe_allow_html=True)
+
     try:
-        gaps = fetch_coverage_gaps()
+        db = get_db()
+        gaps = get_coverage_gaps(db)
         if gaps:
-            st.warning(f"**{len(gaps)}** techniques shown")
-            for g in gaps[:20]:
+            st.markdown(f"**{len(gaps)}** unmitigated techniques detected")
+            for g in gaps[:25]:
                 eid = g.get("external_id", "")
                 name = g.get("name", "")
-                with st.expander(f"⚠️ {eid}: {name}"):
-                    tactics = g.get("tactics", [])
-                    used_by = g.get("used_by", [])
-                    st.markdown(f"**Tactics**: {tactics}")
-                    st.markdown(f"**Used by**: {used_by}")
+                tactics = g.get("tactics", [])
+                used_by = g.get("used_by", [])
+
+                tac_str = ""
+                if tactics:
+                    flat_tac = []
+                    for t in tactics:
+                        if isinstance(t, list):
+                            flat_tac.extend(t)
+                        elif t:
+                            flat_tac.append(t)
+                    tac_str = " · ".join(str(t) for t in flat_tac[:3])
+
+                header = f"⚠️ {eid}: {name}"
+                if tac_str:
+                    header += f" — {tac_str}"
+
+                with st.expander(header):
+                    st.markdown(f"""
+                    <div class="info-callout">
+                        <strong>{name}</strong> ({eid}) is a technique in the MITRE ATT&CK framework. 
+                        It's used by threat groups that target software on your assets, but no mitigation has been mapped.
+                    </div>
+                    """, unsafe_allow_html=True)
+                    if used_by:
+                        flat_groups = []
+                        for u in used_by:
+                            if isinstance(u, list):
+                                flat_groups.extend(u)
+                            elif u:
+                                flat_groups.append(u)
+                        if flat_groups:
+                            st.markdown(f"**Used by**: {', '.join(str(g) for g in flat_groups[:5])}")
+                    st.markdown(f"🔗 [View on ATT&CK](https://attack.mitre.org/techniques/{eid.replace('.','/')}/)")
         else:
-            st.info("No data.")
+            st.success("✅ No coverage gaps detected — all exposed techniques have mitigations.")
     except Exception as e:
         st.warning(f"Error: {e}")
 
-with tab5:
-    st.markdown("### Code Awareness (Layer 3)")
-    st.markdown("Scan a codebase to map its dependency graph and link to known vulnerabilities.")
 
-    repo_path = st.text_input("Repository path:", value="/Users/mariamhassan/langchain/threatgraph",
-                               placeholder="/path/to/your/project")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 5 — CODE AWARENESS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab7:
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(139,92,246,0.15);">💻</div>
+        <div>
+            <div class="section-title">Code Awareness (Layer 3)</div>
+            <div class="section-desc">Scan any codebase to map its dependency graph and cross-reference with known vulnerabilities</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-callout">
+        <strong>How it works:</strong> Point this at any project directory. It parses Python, JavaScript, and TypeScript files 
+        using AST analysis to extract imports, classes, and functions. It also reads <code>requirements.txt</code> and 
+        <code>package.json</code> for dependencies. These are loaded into the knowledge graph and cross-linked to known 
+        vulnerable software — if your code depends on a library with known CVEs, you'll see warnings below.
+    </div>
+    """, unsafe_allow_html=True)
+
+    repo_path = st.text_input("📁 Repository path", value="/Users/mariamhassan/langchain/threatgraph",
+                               help="Absolute path to the codebase you want to scan")
 
     if st.button("🔍 Scan Codebase", type="primary") and repo_path:
-        with st.spinner("Scanning codebase..."):
+        with st.spinner("Scanning codebase and building dependency graph..."):
             try:
                 from src.ingestion.code_scanner import ingest_codebase
                 db = get_db()
                 result = ingest_codebase(db, repo_path)
 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Files", result["total_files"])
-                col2.metric("LOC", f"{result['total_loc']:,}")
-                col3.metric("Dependencies", len(result["dependencies"]))
+                st.markdown(f"""
+                <div class="stat-grid">
+                    <div class="stat-card"><div class="stat-value">{result['total_files']}</div><div class="stat-label">Files</div></div>
+                    <div class="stat-card"><div class="stat-value">{result['total_loc']:,}</div><div class="stat-label">Lines of Code</div></div>
+                    <div class="stat-card"><div class="stat-value">{len(result['dependencies'])}</div><div class="stat-label">Dependencies</div></div>
+                </div>
+                """, unsafe_allow_html=True)
 
-                st.markdown("---")
-                st.markdown("#### Modules")
-                import pandas as pd
+                # Modules table
+                st.markdown("#### 📄 Source Modules")
                 if result["modules"]:
                     mod_df = pd.DataFrame([
-                        {"file": m["file_path"], "language": m["language"],
-                         "classes": len(m.get("classes", [])), "functions": len(m.get("functions", [])),
-                         "imports": len(m.get("imports", [])), "loc": m.get("loc", 0)}
+                        {"File": m["file_path"], "Lang": m["language"],
+                         "Classes": len(m.get("classes", [])), "Functions": len(m.get("functions", [])),
+                         "Imports": len(m.get("imports", [])), "LOC": m.get("loc", 0)}
                         for m in result["modules"]
                     ])
-                    st.dataframe(mod_df, use_container_width=True)
+                    st.dataframe(mod_df, use_container_width=True, hide_index=True)
 
-                st.markdown("#### Dependencies")
+                # Dependencies
+                st.markdown("#### 📦 Dependencies")
                 if result["dependencies"]:
                     dep_df = pd.DataFrame(result["dependencies"])
-                    st.dataframe(dep_df, use_container_width=True)
+                    st.dataframe(dep_df, use_container_width=True, hide_index=True)
 
-                    # Show cross-layer connections
-                    st.markdown("#### 🔗 Cross-Layer Vulnerability Connections")
-                    st.markdown("Dependencies linked to known vulnerable software versions:")
+                    # Cross-layer link
+                    st.markdown("#### 🔗 Vulnerability Cross-References")
                     sw_results = db.query("SELECT name, version FROM software_version;")
                     sw_list = []
                     if isinstance(sw_results, list):
@@ -266,10 +910,183 @@ with tab5:
                             elif isinstance(item, dict):
                                 sw_list.append(item)
                     sw_names = {s.get("name", "").lower(): s for s in sw_list}
+                    found = False
                     for dep in result["dependencies"]:
                         dep_lower = dep["name"].lower()
                         for sw_name, sw_info in sw_names.items():
                             if dep_lower in sw_name or sw_name in dep_lower:
-                                st.warning(f"📦 **{dep['name']}** matches asset software **{sw_info.get('name')} {sw_info.get('version')}** — check for CVEs!")
+                                found = True
+                                st.markdown(f"""
+                                <div class="warn-callout">
+                                    📦 <strong>{dep['name']}</strong> (your dependency) matches asset software 
+                                    <strong>{sw_info.get('name')} {sw_info.get('version')}</strong> — this software has known CVEs! 
+                                    Check the Exposure tab for details.
+                                </div>
+                                """, unsafe_allow_html=True)
+                    if not found:
+                        st.success("✅ No direct dependency-to-vulnerable-software matches found.")
             except Exception as e:
                 st.error(f"Error: {e}")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 6 — GUIDE / TUTORIAL
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab8:
+    st.markdown("""
+    <div class="section-header">
+        <div class="section-icon" style="background:rgba(56,189,248,0.15);">📚</div>
+        <div>
+            <div class="section-title">User Guide & Tutorial</div>
+            <div class="section-desc">Everything you need to understand ThreatGraph, even if you're new to cybersecurity</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Architecture Overview
+    st.markdown("### 🏗️ How ThreatGraph Works")
+
+    st.markdown("""
+    <div class="glass-card">
+        <h3>The Three-Layer Knowledge Graph</h3>
+        <p>ThreatGraph connects three layers of cybersecurity data into a unified knowledge graph:</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("""
+        <div class="glass-card" style="border-left:3px solid var(--accent-blue);">
+            <h3>🧠 Layer 1: Threat Intelligence</h3>
+            <p><strong>MITRE ATT&CK</strong> — the world's most comprehensive catalog of how attackers operate. 
+            Contains 691 techniques, 172 threat groups, and 784 software tools, all connected by "uses" relationships.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown("""
+        <div class="glass-card" style="border-left:3px solid var(--accent-amber);">
+            <h3>🖥️ Layer 2: Asset Inventory</h3>
+            <p><strong>Your assets</strong> — servers, workstations, and the software running on them. 
+            Each software version is matched against the NVD database to find known CVEs, and cross-checked with CISA's KEV list.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown("""
+        <div class="glass-card" style="border-left:3px solid var(--accent-violet);">
+            <h3>💻 Layer 3: Code Awareness</h3>
+            <p><strong>Your codebase</strong> — files, imports, and dependencies parsed via AST analysis. 
+            Dependencies are cross-linked to known vulnerable software, revealing risks hidden in your supply chain.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("### 🔄 The Agent Pipeline")
+
+    st.markdown("""
+    <div class="glass-card">
+        <p>When you ask a question, it flows through a 5-step LangGraph pipeline:</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    steps = [
+        ("1️⃣", "Classify", "Your question is analyzed to determine its type: exposure check, threat hunt, CVE alert, coverage gap, or general query."),
+        ("2️⃣", "Route", "The agent routes to the appropriate tool: KG queries for most questions, NVD API for specific CVE lookups."),
+        ("3️⃣", "Query", "SurrealQL queries traverse the knowledge graph — following edges through techniques → software → assets → CVEs."),
+        ("4️⃣", "Synthesize", "Results are combined into a structured threat assessment with risk rankings and severity scores."),
+        ("5️⃣", "Playbook", "A remediation playbook is generated with prioritized actions, detection rules, and long-term improvements."),
+    ]
+    for icon, title, desc in steps:
+        st.markdown(f"""
+        <div class="glass-card" style="display:flex;gap:1rem;align-items:flex-start;padding:1rem;">
+            <span style="font-size:1.5rem;">{icon}</span>
+            <div><strong style="color:var(--text-primary);">{title}</strong><br/>
+            <span style="color:var(--text-secondary);font-size:0.85rem;">{desc}</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("### 🎯 Quick Start Tutorial")
+
+    st.markdown("""
+    <div class="glass-card" style="border-left:3px solid var(--accent-emerald);">
+        <h3>Step 1: Check Your Exposure</h3>
+        <p>Go to the <strong>📊 Exposure</strong> tab to see all your assets ranked by risk score. 
+        The highest-scoring assets have the most severe combination of vulnerabilities and criticality.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="glass-card" style="border-left:3px solid var(--accent-blue);">
+        <h3>Step 2: Visualize Attack Paths</h3>
+        <p>Go to the <strong>🔗 Attack Graph</strong> tab and select a specific asset. 
+        The interactive graph shows how an attacker could move from your software's vulnerability to a known exploit. 
+        Enable "Show threat groups" to see which APT groups use these techniques.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="glass-card" style="border-left:3px solid var(--accent-amber);">
+        <h3>Step 3: Ask the AI Analyst</h3>
+        <p>Go to the <strong>🔍 Analyst</strong> tab and try: <em>"What's my biggest risk right now?"</em>
+        The agent will query the full knowledge graph and produce a threat assessment + remediation playbook. 
+        Try asking about specific groups (APT29) or assets (web-server-01).</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="glass-card" style="border-left:3px solid var(--accent-rose);">
+        <h3>Step 4: Find Coverage Gaps</h3>
+        <p>The <strong>🛡️ Gaps</strong> tab shows ATT&CK techniques that threat groups use against your software, 
+        but where no mitigation has been documented. These are your blind spots — prioritize adding detection or prevention here.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("### 📊 Understanding Scores")
+
+    st.markdown(f"""
+    <div class="glass-card">
+        <h3>Risk Severity Levels</h3>
+        <p>
+            <span class="risk-badge risk-critical">🔴 CRITICAL (>100)</span>
+            Multiple high-severity CVEs on a critical asset, potentially with active exploitation. <strong>Patch immediately.</strong><br/><br/>
+            <span class="risk-badge risk-high">🟠 HIGH (51-100)</span>
+            Significant exposure requiring urgent attention. May include CVEs with CVSS >7.0.<br/><br/>
+            <span class="risk-badge risk-medium">🟡 MEDIUM (26-50)</span> 
+            Moderate risk. CVEs exist but may be lower severity or on less critical assets.<br/><br/>
+            <span class="risk-badge risk-low">🟢 LOW (<25)</span>
+            Minimal exposure. Keep monitoring but no immediate action needed.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("### 🏢 Sample Assets")
+
+    st.markdown("""
+    <div class="info-callout">
+        <strong>Note:</strong> This demo uses 5 intentionally vulnerable servers to showcase the system. 
+        In production, you'd connect to real asset management tools (ServiceNow, Qualys, CrowdStrike, etc.).
+    </div>
+    """, unsafe_allow_html=True)
+
+    assets_data = [
+        {"Asset": "web-server-01", "Software": "Apache 2.4.49, OpenSSL 1.1.1k, PHP 8.0.10", "Zone": "DMZ", "Criticality": "Critical", "Why Vulnerable": "Apache 2.4.49 has a path traversal CVE"},
+        {"Asset": "db-server-01", "Software": "PostgreSQL 13.2, OpenSSH 8.2p1", "Zone": "Internal", "Criticality": "Critical", "Why Vulnerable": "Outdated PostgreSQL with known vulns"},
+        {"Asset": "api-server-01", "Software": "nginx 1.21.0, Node.js 16, Log4j 2.14.1", "Zone": "DMZ", "Criticality": "High", "Why Vulnerable": "Log4Shell (CVE-2021-44228) — CVSS 10.0!"},
+        {"Asset": "mail-server-01", "Software": "Exchange 2019 CU10, IIS 10.0", "Zone": "Internal", "Criticality": "High", "Why Vulnerable": "ProxyShell/ProxyLogon Exchange CVEs"},
+        {"Asset": "dev-workstation-01", "Software": "Docker Desktop 4.22.0, Python 3.11.4", "Zone": "Corporate", "Criticality": "Medium", "Why Vulnerable": "Container escape, supply chain risk"},
+    ]
+    st.dataframe(pd.DataFrame(assets_data), use_container_width=True, hide_index=True)
+
+    st.markdown("### 🔧 Setup & Commands")
+
+    st.code("""# Start SurrealDB
+surreal start --user root --pass root --bind 0.0.0.0:8000 memory
+
+# Run data ingestion (loads ATT&CK, CVEs, assets — takes ~30s)
+python3 ingest.py
+
+# Launch dashboard
+streamlit run app.py
+
+# Docker alternative (does everything)
+docker-compose up --build
+""", language="bash")
