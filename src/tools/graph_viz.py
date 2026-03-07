@@ -121,6 +121,28 @@ def _planner_edge_weight(source_group, target_group, source_data, target_data, e
     return 1.0
 
 
+def _real_graph_node_for_path_node(node_id: str) -> str | None:
+    if node_id == "internet":
+        return None
+    if node_id.startswith("comp:"):
+        return node_id[len("comp:") :]
+    return node_id
+
+
+def _path_node_label(G, node_id: str) -> str:
+    if node_id == "internet":
+        return "internet"
+    if node_id in G.nodes:
+        return G.nodes[node_id].get("label", node_id)
+    real_node = _real_graph_node_for_path_node(node_id)
+    if real_node and real_node in G.nodes:
+        base = G.nodes[real_node].get("label", real_node)
+        if node_id.startswith("comp:"):
+            return f"{base} compromised"
+        return base
+    return node_id
+
+
 # ─── GRAPH BUILDERS ───────────────────────────────────
 
 def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=True, bundles=None) -> nx.DiGraph:
@@ -710,8 +732,11 @@ def highlight_attack_paths(G, paths):
         risk = path_info["risk"]
         top_cves = ", ".join(path_info.get("top_cves", [])) or "None"
         top_groups = ", ".join(path_info.get("top_groups", [])) or "None"
-        for i in range(len(path) - 1):
-            src, dst = path[i], path[i + 1]
+        mapped_nodes = [_real_graph_node_for_path_node(node) for node in path]
+        for i in range(len(mapped_nodes) - 1):
+            src, dst = mapped_nodes[i], mapped_nodes[i + 1]
+            if not src or not dst or src == dst:
+                continue
             # Check both directions
             if G.has_edge(src, dst):
                 G[src][dst]["color"] = {"color": "#FF0055", "highlight": "#FF3333"}
@@ -805,7 +830,7 @@ def _build_matrix_stats(G, paths=None):
             risk = path_info["risk"]
             labels = []
             for n in path:
-                lbl = G.nodes[n].get("label", n).replace("🌐 ", "").replace("🔒 ", "").replace("🏢 ", "").replace(" 👑", "")
+                lbl = _path_node_label(G, n).replace("🌐 ", "").replace("🔒 ", "").replace("🏢 ", "").replace(" 👑", "")
                 labels.append(lbl)
             path_str = " → ".join(labels)
             path_html += f"""<div style="color:#FF6B00;font-size:9px;margin-top:2px;">
