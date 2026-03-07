@@ -940,26 +940,25 @@ with tab4:
     </div>
     """, unsafe_allow_html=True)
 
-    asset_choice = st.selectbox("Select asset to investigate:", [
-        "web-server-01", "db-server-01", "api-server-01", "mail-server-01", "dev-workstation-01"
-    ], key="asset_deep_dive")
+    try:
+        db_tmp = get_db()
+        asset_list = surreal_query(db_tmp, "SELECT hostname FROM asset ORDER BY hostname;")
+        asset_names = [a.get("hostname", "") for a in asset_list if a.get("hostname")]
+    except Exception:
+        asset_names = ["web-server-01", "db-server-01", "api-server-01", "mail-server-01", "dev-workstation-01"]
+
+    asset_choice = st.selectbox("Select asset to investigate:", asset_names, key="asset_deep_dive")
 
     try:
+        from src.tools.surreal_tools import get_asset_exposure
         db = get_db()
-        details = surreal_query(db, """
-            SELECT hostname, criticality, os, network_zone, ip_address, owner,
-                ->runs->software_version.name AS sw_names,
-                ->runs->software_version.version AS sw_versions,
-                ->runs->software_version->has_cve->cve.cve_id AS cve_ids,
-                ->runs->software_version->has_cve->cve.cvss_score AS cvss_scores,
-                ->runs->software_version->has_cve->cve.is_kev AS kev_flags,
-                ->runs->software_version->has_cve->cve.description AS cve_descs
-            FROM asset WHERE hostname = $h;
-        """, {"h": asset_choice})
+        details = get_asset_exposure(db, asset_choice)
 
         if details:
             a = details[0]
             crit = a.get("criticality", "medium")
+            crit_score = a.get("criticality_score", 5.0) or 5.0
+            is_crown = a.get("is_crown_jewel", False)
 
             def _flat(val):
                 out = []
@@ -972,25 +971,46 @@ with tab4:
                         out.append(v)
                 return out
 
-            sw_names = _flat(a.get("sw_names", []))
-            sw_versions = _flat(a.get("sw_versions", []))
-            cve_ids = _flat(a.get("cve_ids", []))
+            sw_names = _flat(a.get("software", []))
+            sw_versions = _flat(a.get("versions", []))
+            cve_ids = _flat(a.get("cves", []))
             cvss_scores = [s for s in _flat(a.get("cvss_scores", [])) if isinstance(s, (int, float))]
-            kev_flags = _flat(a.get("kev_flags", []))
+            kev_flags = _flat(a.get("actively_exploited", []))
+            controls = _flat(a.get("controls", []))
+            threats = _flat(a.get("threats", []))
 
             kev_count = sum(1 for k in kev_flags if k)
             max_cvss = max(cvss_scores) if cvss_scores else 0
             avg_cvss = sum(cvss_scores) / len(cvss_scores) if cvss_scores else 0
 
             crit_colors = {"critical": "#ef4444", "high": "#f97316", "medium": "#eab308", "low": "#22c55e"}
+            border_color = "#FFD700" if is_crown else crit_colors.get(crit, '#eab308')
+            crown_icon = "👑 " if is_crown else ""
+            
             st.markdown(f"""
-            <div class="glass-card" style="border-left:4px solid {crit_colors.get(crit, '#eab308')};">
+            <div class="glass-card" style="border-left:4px solid {border_color}; margin-bottom: 20px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
-                        <h3 style="margin:0;font-size:1.3rem;">🖥️ {a.get('hostname', '?')}</h3>
-                        <p style="margin:4px 0 0 0;">{a.get('os', '')} · {a.get('network_zone', '')} zone · IP: {a.get('ip_address', '')}</p>
+                        <h3 style="margin:0;font-size:1.3rem;">{crown_icon}🖥️ {a.get('hostname', '?')}</h3>
+                        <p style="margin:4px 0 0 0; color: #a1a1aa;">
+                            <strong>ZONE:</strong> <span style="color:#00ffff;">{str(a.get('network_zone', '')).upper()}</span> · 
+                            <strong>OS:</strong> {a.get('os', '')} · 
+                            <strong>IP:</strong> {a.get('ip_address', '')}
+                        </p>
                     </div>
-                    <span class="risk-badge risk-{crit}" style="font-size:0.85rem;padding:0.4rem 1.2rem;">{crit.upper()} CRITICALITY</span>
+                    <span class="risk-badge risk-{crit}" style="font-size:0.85rem;padding:0.4rem 1.2rem; border-color: {border_color}; color: {border_color};">
+                        {crit.upper()} ({crit_score}/10)
+                    </span>
+                </div>
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); display: flex; gap: 20px;">
+                    <div style="flex: 1;">
+                        <span style="color: #4ade80; font-size: 0.9rem; font-weight: bold;">🛡️ IN-PLACE CONTROLS:</span><br>
+                        <span style="color: #d4d4d8; font-size: 0.85rem;">{', '.join(controls) if controls else 'None detected'}</span>
+                    </div>
+                    <div style="flex: 1;">
+                        <span style="color: #f87171; font-size: 0.9rem; font-weight: bold;">💀 THREAT VECTORS:</span><br>
+                        <span style="color: #d4d4d8; font-size: 0.85rem;">{', '.join(threats) if threats else 'None specifically mapped'}</span>
+                    </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)

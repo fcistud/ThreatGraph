@@ -93,15 +93,17 @@ def get_cve_blast_radius(db, cve_id: str) -> list:
 
 
 def get_asset_exposure(db, hostname: str) -> list:
-    """Get complete exposure profile for an asset."""
+    """Get complete exposure profile for an asset, including controls and threats."""
     query = """
     SELECT
-        hostname, os, network_zone, criticality,
+        hostname, os, network_zone, criticality, criticality_score, is_crown_jewel,
         ->runs->software_version.name AS software,
         ->runs->software_version.version AS versions,
         ->runs->software_version->has_cve->cve.cve_id AS cves,
         ->runs->software_version->has_cve->cve.cvss_score AS cvss_scores,
-        ->runs->software_version->has_cve->cve.is_kev AS actively_exploited
+        ->runs->software_version->has_cve->cve.is_kev AS actively_exploited,
+        <-protects<-security_control.name AS controls,
+        <-exposes<-threat_vector.name AS threats
     FROM asset
     WHERE hostname = $hostname;
     """
@@ -109,10 +111,11 @@ def get_asset_exposure(db, hostname: str) -> list:
 
 
 def compute_exposure_score(db, hostname: Optional[str] = None) -> dict:
-    """Compute exposure score for an asset or the entire organization."""
+    """Compute exposure score based on CVSS, Criticality, Exposure, and Controls."""
     if hostname:
         query = """
-        SELECT hostname, criticality,
+        SELECT hostname, criticality, criticality_score, network_zone,
+            <-protects<-security_control.effectiveness AS control_effs,
             ->runs->software_version->has_cve->cve.cvss_score AS scores,
             ->runs->software_version->has_cve->cve.is_kev AS kev_flags
         FROM asset WHERE hostname = $hostname;
@@ -120,7 +123,8 @@ def compute_exposure_score(db, hostname: Optional[str] = None) -> dict:
         results = surreal_query(db, query, {"hostname": hostname})
     else:
         query = """
-        SELECT hostname, criticality,
+        SELECT hostname, criticality, criticality_score, network_zone,
+            <-protects<-security_control.effectiveness AS control_effs,
             ->runs->software_version->has_cve->cve.cvss_score AS scores,
             ->runs->software_version->has_cve->cve.is_kev AS kev_flags
         FROM asset;
@@ -128,10 +132,20 @@ def compute_exposure_score(db, hostname: Optional[str] = None) -> dict:
         results = surreal_query(db, query)
 
     asset_scores = []
+    zone_multipliers = {"internet": 1.0, "dmz": 0.8, "corporate": 0.4, "internal": 0.3, "airgap": 0.05}
+    
     for asset in results:
         h = asset.get("hostname", "unknown")
         crit = asset.get("criticality", "medium")
-        crit_mult = {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(crit, 2)
+        crit_score = asset.get("criticality_score", 5.0) or 5.0
+        zone = asset.get("network_zone", "dmz")
+        
+        exposure_multiplier = zone_multipliers.get(zone, 0.5)
+        
+        control_effs = _flatten_nums(asset.get("control_effs", []))
+        # Get the strongest control or default to 0
+        max_eff = max(control_effs) if control_effs else 0.0
+        control_reduction = 1.0 - min(max_eff, 0.95)
 
         scores = asset.get("scores", [])
         kev_flags = asset.get("kev_flags", [])
@@ -141,7 +155,12 @@ def compute_exposure_score(db, hostname: Optional[str] = None) -> dict:
 
         total_cvss = sum(flat_scores)
         kev_count = sum(1 for k in flat_kev if k)
-        score = (total_cvss * crit_mult) + (kev_count * 20)
+        
+        # New Composite Score Magic Formula:
+        # Sum of CVSS * (Criticality / 10) * Network Zone Exposure * Control Reduction
+        base_score = total_cvss * (crit_score / 10.0)
+        score = base_score * exposure_multiplier * control_reduction
+        score += (kev_count * 20)  # +20 penalty per active KEV exploit
 
         asset_scores.append({
             "hostname": h,
