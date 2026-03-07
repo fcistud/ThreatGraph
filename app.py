@@ -568,6 +568,11 @@ def cached_stats():
         return {}
 
 
+def _set_sidebar_query(query_text: str) -> None:
+    st.session_state["q"] = query_text
+    st.session_state["qbox"] = query_text
+
+
 def _risk_class(score):
     if score > 100:
         return "critical"
@@ -617,6 +622,8 @@ st.markdown("""
 with st.sidebar:
     if "thread_id" not in st.session_state:
         st.session_state["thread_id"] = str(uuid.uuid4())
+    if "sidebar_thread_id" not in st.session_state:
+        st.session_state["sidebar_thread_id"] = st.session_state["thread_id"]
 
     st.markdown("## 📊 Knowledge Graph")
     try:
@@ -645,10 +652,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("## 🧵 Investigation State")
-    thread_id = st.text_input("Thread ID", value=st.session_state.get("thread_id", ""), key="sidebar_thread_id")
+    thread_id = st.text_input("Thread ID", key="sidebar_thread_id")
     st.session_state["thread_id"] = thread_id
     if st.button("New Investigation Thread", use_container_width=True):
-        st.session_state["thread_id"] = str(uuid.uuid4())
+        new_thread_id = str(uuid.uuid4())
+        st.session_state["thread_id"] = new_thread_id
+        st.session_state["sidebar_thread_id"] = new_thread_id
         st.rerun()
 
     trace_status = get_tracing_status()
@@ -699,8 +708,13 @@ with st.sidebar:
         ("Tell me about web-server-01", "🖥️"),
     ]
     for ex_text, icon in examples:
-        if st.button(f"{icon} {ex_text}", key=f"ex_{hash(ex_text)}", use_container_width=True):
-            st.session_state["q"] = ex_text
+        st.button(
+            f"{icon} {ex_text}",
+            key=f"ex_{hash(ex_text)}",
+            use_container_width=True,
+            on_click=_set_sidebar_query,
+            args=(ex_text,),
+        )
 
     st.markdown("---")
 
@@ -753,7 +767,10 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
 
-    q = st.text_input("", value=st.session_state.get("q", ""),
+    if "qbox" not in st.session_state:
+        st.session_state["qbox"] = st.session_state.get("q", "")
+
+    q = st.text_input("Analyst Query",
                        placeholder="e.g., Am I vulnerable to APT29? / What's my biggest risk? / Tell me about CVE-2021-44228",
                        label_visibility="collapsed", key="qbox")
 
