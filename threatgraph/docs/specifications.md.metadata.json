@@ -1,0 +1,5 @@
+{
+  "artifactType":  "ARTIFACT_TYPE_OTHER",
+  "summary":  "Detailed functional and non-functional specifications for ThreatGraph. Covers 25 functional requirements across 4 priority levels (P0-P3), 10 non-functional requirements, data source specifications with API details and rate limits, agent tool specifications, SurrealDB requirements, LangGraph requirements, and hackathon compliance matrix mapping to all judging criteria.",
+  "updatedAt":  "2026-03-06T23:53:59.105562Z"
+}

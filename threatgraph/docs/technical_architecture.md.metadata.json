@@ -1,0 +1,5 @@
+{
+  "artifactType":  "ARTIFACT_TYPE_OTHER",
+  "summary":  "Detailed technical architecture for ThreatGraph. Complete SurrealDB schema (13 node types, 15 edge types), LangGraph 7-node workflow with full Python code, tool implementations, vector search integration, the complete data flow from STIX ingestion through CVE correlation to attack path synthesis, codebase awareness layer design inspired by GitNexus, checkpointing backend, and deployment architecture.",
+  "updatedAt":  "2026-03-06T23:55:55.421193Z"
+}

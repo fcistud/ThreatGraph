@@ -1,0 +1,5 @@
+{
+  "artifactType":  "ARTIFACT_TYPE_OTHER",
+  "summary":  "Full-length project description for ThreatGraph explaining the complete pipeline from MITRE ATT&CK knowledge graph → asset vulnerability identification → specific attack path visualization → remediation suggestions. Covers the 4-layer architecture (Threat Intel KG, Asset Inventory, Code Awareness, Agent Orchestration), explains how the system works step-by-step with concrete examples, defines the target users, and describes the open-source contribution strategy.",
+  "updatedAt":  "2026-03-06T23:53:00.414374Z"
+}

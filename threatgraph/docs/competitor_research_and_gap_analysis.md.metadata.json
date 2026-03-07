@@ -1,0 +1,5 @@
+{
+  "artifactType":  "ARTIFACT_TYPE_OTHER",
+  "summary":  "Exhaustive competitive landscape research for ThreatGraph. Covers 5 tiers: enterprise platforms (CrowdStrike, SentinelOne, Palo Alto, IBM, Fortinet), cybersecurity AI startups (Hunters.AI, Calmo, Deep Instinct, VulnCheck), MITRE ATT&CK graph database GitHub projects (7 projects analyzed), AI code security tools (Claude Code Security, HexStrike, Strix, SWE-agent, Trail of Bits), and codebase KG tools (GitNexus, Potpie). Includes gap analysis matrix showing no tool combines KG + agent + asset correlation + codebase awareness. Identifies precise MOAT in the schema IP, temporal evolution, and open-source flywheel.",
+  "updatedAt":  "2026-03-06T23:52:01.127287Z"
+}
