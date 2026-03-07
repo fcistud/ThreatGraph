@@ -94,10 +94,11 @@ def _risk_score(cvss, criticality_score, zone, control_effectiveness=0):
 
 # ─── GRAPH BUILDERS ───────────────────────────────────
 
-def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=True) -> nx.DiGraph:
+def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=True, bundles=None) -> nx.DiGraph:
     """Build the full enterprise network topology graph."""
     G = nx.DiGraph()
-    bundles = {bundle["hostname"]: bundle for bundle in get_attack_paths(db)}
+    bundle_rows = bundles or get_attack_paths(db, hostname) if hostname else bundles or get_attack_paths(db)
+    bundles = {bundle["hostname"]: bundle for bundle in bundle_rows}
     asset_scores = {
         hostname_key: compute_asset_exposure_score(bundle)
         for hostname_key, bundle in bundles.items()
@@ -239,6 +240,7 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
                     font={**FONT, "size": 9, "color": "#00FFFF"},
                     title=f"<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid #00FFFF;padding:8px;'><div style='color:#00FFFF;text-shadow:0 0 10px #00FFFF;'>📦 {sw_name} v{sw_ver}</div></div>",
                     shadow={"enabled": True, "color": "#00FFFF", "size": 4},
+                    software_version_id=sw_id,
                 )
             G.add_edge(asset_node, sw_node,
                 color={"color": "rgba(0,255,255,0.25)", "highlight": "#00FFFF"},
@@ -393,48 +395,123 @@ def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=T
     return G
 
 
-def add_threat_layer(G, db):
-    """Add MITRE ATT&CK threat groups and techniques."""
-    groups = surreal_query(db, """
-        SELECT name, external_id, aliases, description,
-            ->uses->technique.external_id AS tech_ids,
-            ->uses->technique.name AS tech_names
-        FROM threat_group
-        WHERE count(->uses->technique) > 0
-        LIMIT 10;
-    """)
-    for g in groups:
-        gname = g.get("name", "")
-        geid = g.get("external_id", "")
-        tech_ids = _flatten(g.get("tech_ids", []))
-        tech_names = _flatten(g.get("tech_names", []))
-        if not tech_ids:
-            continue
-        g_node = f"group:{gname}"
-        if g_node not in G.nodes:
-            G.add_node(g_node,
-                label=f"👤 {gname}\n({geid})",
-                group="threat_group", shape="star",
-                color={"background": "#FF00FF", "border": "#FF00FF"},
-                size=30, font={**FONT, "size": 10, "bold": True, "color": "#FF00FF"},
-                title=f"<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid #FF00FF;padding:10px;'><div style='color:#FF00FF;text-shadow:0 0 15px #FF00FF;'>👤 {gname} ({geid})</div><div style='color:#7FB87F;font-size:10px;'>TECHNIQUES: {len(tech_ids)}</div></div>",
-                shadow={"enabled": True, "color": "#FF00FF", "size": 8},
-            )
-        for tid, tname in zip(tech_ids[:6], tech_names[:6]):
-            if not tid:
-                continue
-            t_node = f"tech:{tid}"
-            if t_node not in G.nodes:
-                G.add_node(t_node,
-                    label=f"⚔️ {tid}\n{str(tname or '')[:20]}",
-                    group="technique", shape="dot",
-                    color={"background": "#0080FF", "border": "#0080FF"},
-                    size=15, font={**FONT, "size": 8, "color": "#0080FF"},
-                    shadow={"enabled": True, "color": "#0080FF", "size": 4},
-                )
-            G.add_edge(g_node, t_node,
-                color={"color": "rgba(255,0,255,0.3)"}, width=1, arrows="to",
-                smooth={"type": "curvedCW", "roundness": 0.2})
+def add_threat_layer(G, bundles):
+    """Add ATT&CK software, techniques, and groups relevant to the current asset evidence."""
+    sw_node_by_record = {
+        data.get("software_version_id"): node_id
+        for node_id, data in G.nodes(data=True)
+        if data.get("group") == "software"
+    }
+
+    for bundle in bundles:
+        attack_lookup = {row.get("id"): row for row in bundle.get("attack_software", [])}
+        technique_lookup = {
+            row.get("external_id"): row
+            for row in bundle.get("techniques", [])
+            if row.get("external_id")
+        }
+        group_lookup = {
+            row.get("external_id"): row
+            for row in bundle.get("threat_groups", [])
+            if row.get("external_id")
+        }
+
+        for path in bundle.get("evidence_paths", []):
+            sw_node = sw_node_by_record.get(path.get("software_version_id"))
+            attack_id = path.get("attack_software_id")
+            attack_name = path.get("attack_software_name")
+            technique_id = path.get("technique_id")
+            technique_name = path.get("technique_name")
+            group_id = path.get("threat_group_id")
+            group_name = path.get("threat_group_name")
+
+            attack_node = None
+            if attack_id and attack_name:
+                attack_meta = attack_lookup.get(attack_id, {})
+                attack_label_id = attack_meta.get("external_id") or attack_id.split(":")[-1]
+                attack_node = f"attacksw:{attack_label_id}"
+                if attack_node not in G.nodes:
+                    G.add_node(
+                        attack_node,
+                        label=f"🧰 {attack_name}\n({attack_label_id})",
+                        group="attack_software",
+                        shape="diamond",
+                        color={"background": "#00BFFF", "border": "#00BFFF"},
+                        size=20,
+                        font={**FONT, "size": 8, "color": "#00BFFF"},
+                        shadow={"enabled": True, "color": "#00BFFF", "size": 5},
+                    )
+                if sw_node and not G.has_edge(sw_node, attack_node):
+                    G.add_edge(
+                        sw_node,
+                        attack_node,
+                        color={"color": "rgba(0,191,255,0.35)"},
+                        width=1,
+                        arrows="to",
+                        title="LINKED TO ATT&CK SOFTWARE",
+                        smooth={"type": "curvedCW", "roundness": 0.12},
+                    )
+
+            tech_node = None
+            if technique_id and technique_name:
+                tech_node = f"tech:{technique_id}"
+                if tech_node not in G.nodes:
+                    G.add_node(
+                        tech_node,
+                        label=f"⚔️ {technique_id}\n{str(technique_name)[:20]}",
+                        group="technique",
+                        shape="dot",
+                        color={"background": "#0080FF", "border": "#0080FF"},
+                        size=15,
+                        font={**FONT, "size": 8, "color": "#0080FF"},
+                        shadow={"enabled": True, "color": "#0080FF", "size": 4},
+                    )
+                if attack_node and not G.has_edge(attack_node, tech_node):
+                    G.add_edge(
+                        attack_node,
+                        tech_node,
+                        color={"color": "rgba(0,128,255,0.35)"},
+                        width=1,
+                        arrows="to",
+                        title="ATT&CK SOFTWARE USES TECHNIQUE",
+                        smooth={"type": "curvedCW", "roundness": 0.18},
+                    )
+
+            if group_id and group_name:
+                group_meta = group_lookup.get(group_id, {})
+                group_node = f"group:{group_id}"
+                if group_node not in G.nodes:
+                    G.add_node(
+                        group_node,
+                        label=f"👤 {group_name}\n({group_id})",
+                        group="threat_group",
+                        shape="star",
+                        color={"background": "#FF00FF", "border": "#FF00FF"},
+                        size=28,
+                        font={**FONT, "size": 9, "bold": True, "color": "#FF00FF"},
+                        title=f"<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;border:1px solid #FF00FF;padding:10px;'><div style='color:#FF00FF;text-shadow:0 0 15px #FF00FF;'>👤 {group_name} ({group_id})</div><div style='color:#7FB87F;font-size:10px;'>{group_meta.get('name', '')}</div></div>",
+                        shadow={"enabled": True, "color": "#FF00FF", "size": 8},
+                    )
+                if attack_node and not G.has_edge(group_node, attack_node):
+                    G.add_edge(
+                        group_node,
+                        attack_node,
+                        color={"color": "rgba(255,0,255,0.3)"},
+                        width=1,
+                        arrows="to",
+                        title="THREAT GROUP EMPLOYS ATT&CK SOFTWARE",
+                        smooth={"type": "curvedCW", "roundness": 0.2},
+                    )
+                elif tech_node and not G.has_edge(group_node, tech_node):
+                    G.add_edge(
+                        group_node,
+                        tech_node,
+                        color={"color": "rgba(255,0,255,0.3)"},
+                        width=1,
+                        arrows="to",
+                        title="THREAT GROUP USES TECHNIQUE",
+                        smooth={"type": "curvedCW", "roundness": 0.2},
+                    )
     return G
 
 
@@ -741,9 +818,10 @@ def generate_attack_path_viz(hostname=None, include_groups=False, show_controls=
                               show_threats=True, show_attack_paths=True) -> str:
     """Main entry point — generate Matrix-style enterprise graph."""
     db = get_db()
-    G = build_enterprise_graph(db, hostname, show_controls, show_threats)
+    bundles = get_attack_paths(db, hostname) if hostname else get_attack_paths(db)
+    G = build_enterprise_graph(db, hostname, show_controls, show_threats, bundles=bundles)
     if include_groups:
-        G = add_threat_layer(G, db)
+        G = add_threat_layer(G, bundles)
 
     paths = []
     if show_attack_paths:
