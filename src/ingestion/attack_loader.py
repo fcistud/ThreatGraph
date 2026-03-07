@@ -22,7 +22,6 @@ STIX_TYPE_MAP = {
 }
 
 RELATIONSHIP_MAP = {
-    "uses": "uses",
     "mitigates": "mitigates",
     "subtechnique-of": "subtechnique_of",
     "attributed-to": "attributed_to",
@@ -54,12 +53,26 @@ def extract_fields(obj: dict, table: str) -> dict:
     elif table == "software":
         base["sw_type"] = obj.get("type", "")
         base["platforms"] = obj.get("x_mitre_platforms", [])
+        base["aliases"] = obj.get("x_mitre_aliases", obj.get("aliases", [])) or []
     elif table == "tactic":
         base["shortname"] = obj.get("x_mitre_shortname", "")
     elif table == "campaign":
         base["first_seen"] = obj.get("first_seen", "")
         base["last_seen"] = obj.get("last_seen", "")
     return base
+
+
+def get_relationship_table(rel_type: str, src: str, tgt: str) -> str | None:
+    """Map ATT&CK relationship triples onto the graph edge tables."""
+    if rel_type == "uses":
+        src_table = src.split(":", 1)[0]
+        tgt_table = tgt.split(":", 1)[0]
+        if src_table == "threat_group" and tgt_table == "software":
+            return "employs"
+        if src_table == "campaign" and tgt_table == "technique":
+            return "campaign_uses"
+        return "uses"
+    return RELATIONSHIP_MAP.get(rel_type)
 
 
 def ingest_attack(db, stix_path: str):
@@ -112,13 +125,12 @@ def ingest_attack(db, stix_path: str):
 
     for obj in rels:
         rel_type = obj.get("relationship_type", "")
-        edge_table = RELATIONSHIP_MAP.get(rel_type)
-        if not edge_table:
-            continue
-
         src = stix_to_surreal.get(obj.get("source_ref", ""))
         tgt = stix_to_surreal.get(obj.get("target_ref", ""))
         if not src or not tgt:
+            continue
+        edge_table = get_relationship_table(rel_type, src, tgt)
+        if not edge_table:
             continue
 
         batch.append(f"RELATE {src}->{edge_table}->{tgt};")

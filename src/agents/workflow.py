@@ -1,319 +1,512 @@
-"""ThreatGraph LangGraph agent — multi-step security investigation workflow.
+"""ThreatGraph LangGraph workflow with structured evidence and persistence."""
 
-Uses LangGraph for orchestration with sync SurrealDB tools.
-Falls back to structured report generation when no LLM API key is provided.
-"""
+from __future__ import annotations
 
 import json
+import os
 import re
 import sys
-import os
-from typing import TypedDict, Optional, Literal, Any
+import uuid
+from typing import Optional, TypedDict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
 from src.database import get_db
-from src.tools.surreal_tools import (
-    get_attack_paths, get_exposure_for_group, get_technique_details,
-    get_cve_blast_radius, get_asset_exposure, compute_exposure_score,
-    get_coverage_gaps, search_kg, surreal_query,
-)
 from src.tools.nvd_tool import lookup_cve
+from src.tools.surreal_tools import (
+    compute_exposure_score,
+    get_asset_evidence_bundle,
+    get_attack_paths,
+    get_coverage_gaps,
+    get_cve_blast_radius,
+    get_exposure_for_group,
+    search_kg,
+)
 
 
-# ─── STATE ────────────────────────────────────────────
-
-class ThreatGraphState(TypedDict):
+class ThreatGraphState(TypedDict, total=False):
     query: str
+    thread_id: str
     query_type: str
     kg_results: list
     cve_data: list
     exposure_data: dict
     attack_paths: list
+    ranked_assets: list
+    evidence_bundle: dict
+    matched_group: str
+    matched_asset: str
+    investigation_context: dict
     synthesis: str
     playbook: str
 
 
-SYSTEM_PROMPT = """You are ThreatGraph, an AI cybersecurity analyst with access to a MITRE ATT&CK 
-knowledge graph (794 techniques, 143 threat groups, 680+ software) linked to an organization's 
-asset inventory with CVE mappings. Always reference ATT&CK IDs (T-codes, G-codes, M-codes) and 
-CVE IDs when available. Be concise, actionable, and prioritize by risk."""
+SYSTEM_PROMPT = """You are ThreatGraph, an AI cybersecurity analyst with access to a MITRE ATT&CK
+knowledge graph linked to an organization's assets, software versions, CVEs, techniques, and
+threat groups. Be concise, evidence-backed, and prioritize the most exposed asset first."""
 
 
 def _get_llm():
-    """Get LLM, trying Anthropic first, then OpenAI."""
     from src.config import ANTHROPIC_API_KEY, OPENAI_API_KEY
+
     if ANTHROPIC_API_KEY:
         from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model="claude-sonnet-4-20250514", api_key=ANTHROPIC_API_KEY, max_tokens=2048, temperature=0)
-    elif OPENAI_API_KEY:
+
+        return ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            api_key=ANTHROPIC_API_KEY,
+            max_tokens=2048,
+            temperature=0,
+        )
+    if OPENAI_API_KEY:
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o", api_key=OPENAI_API_KEY, max_tokens=4096)
+
+        return ChatOpenAI(model="gpt-4o", api_key=OPENAI_API_KEY, max_tokens=4096, temperature=0)
     return None
 
-
-# ─── NODE FUNCTIONS ────────────────────────────────────
 
 def classify_query(state: ThreatGraphState) -> dict:
     """Classify the user's security question."""
     query = state["query"].lower()
 
-    if re.findall(r'cve-\d{4}-\d{4,}', query):
+    if re.findall(r"cve-\d{4}-\d{4,}", query):
         return {"query_type": "cve_alert"}
-
-    if any(k in query for k in ["vulnerable", "exposed", "risk", "affect", "impact", "weakest", "biggest"]):
-        return {"query_type": "exposure_check"}
-
-    if any(k in query for k in ["apt", "group", "actor", "threat group", "who targets"]):
-        return {"query_type": "threat_hunt"}
-
-    if any(k in query for k in ["coverage", "gap", "missing", "unmitigated", "detection"]):
+    if any(token in query for token in ["coverage", "gap", "missing", "unmitigated", "detection"]):
         return {"query_type": "coverage_gap"}
-
+    if any(token in query for token in ["who targets", "profile", "threat group", "actor profile"]):
+        return {"query_type": "threat_hunt"}
+    if any(
+        token in query
+        for token in [
+            "vulnerable",
+            "exposed",
+            "risk",
+            "impact",
+            "weakest",
+            "biggest",
+            "patch",
+            "remediation",
+            "remediate",
+            "fix",
+            "most exposed",
+            "that one",
+        ]
+    ):
+        return {"query_type": "exposure_check"}
+    if detect_mentioned_group(query):
+        return {"query_type": "threat_hunt"}
     return {"query_type": "general"}
 
 
+def detect_mentioned_asset(db, query_text: str) -> Optional[str]:
+    """Return a hostname if the query mentions a known asset."""
+    rows = db.query("SELECT hostname FROM asset;")
+    hostnames = [row.get("hostname", "") for row in rows if isinstance(row, dict)]
+    lowered = query_text.lower()
+    for hostname in hostnames:
+        if hostname and hostname.lower() in lowered:
+            return hostname
+    return None
+
+
+def detect_mentioned_group(query_text: str, db=None) -> Optional[str]:
+    """Return a group token from the query if one is present."""
+    candidates = [
+        r"\bAPT\s*\d+\b",
+        r"\bLazarus\b",
+        r"\bHAFNIUM\b",
+        r"\bWizard Spider\b",
+        r"\bOilRig\b",
+        r"\bScattered Spider\b",
+        r"\bVolt Typhoon\b",
+        r"\bCozy Bear\b",
+        r"\bFancy Bear\b",
+        r"\bSandworm Team\b",
+        r"\bAkira\b",
+        r"\bBlackByte\b",
+        r"\bFIN\d+\b",
+    ]
+    for pattern in candidates:
+        match = re.search(pattern, query_text, re.IGNORECASE)
+        if match:
+            return re.sub(r"\s+", "", match.group(0)).upper() if "APT" in match.group(0).upper() else match.group(0)
+
+    if db is not None:
+        lowered_query = query_text.lower()
+        rows = db.query("SELECT name, aliases FROM threat_group;")
+        matches: list[tuple[int, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            values = [row.get("name", "")]
+            aliases = row.get("aliases", [])
+            if isinstance(aliases, list):
+                values.extend(alias for alias in aliases if alias)
+
+            for value in values:
+                candidate = value.strip().lower()
+                if not candidate:
+                    continue
+                if re.search(rf"\b{re.escape(candidate)}\b", lowered_query):
+                    matches.append((len(candidate), row.get("name", value)))
+                    break
+
+        if matches:
+            matches.sort(key=lambda item: item[0], reverse=True)
+            return matches[0][1]
+    return None
+
+
+def _resolve_focus_asset(db, query_text: str, investigation_context: dict) -> Optional[str]:
+    asset = detect_mentioned_asset(db, query_text)
+    if asset:
+        return asset
+
+    follow_up_tokens = ("that one", "that asset", "it", "this asset", "the same")
+    if any(token in query_text.lower() for token in follow_up_tokens):
+        return investigation_context.get("top_asset")
+    return investigation_context.get("top_asset") if "remediation" in query_text.lower() else None
+
+
+def _resolve_focus_group(db, query_text: str, investigation_context: dict) -> Optional[str]:
+    group = detect_mentioned_group(query_text, db=db)
+    if group:
+        return group
+    follow_up_tokens = ("that group", "same group", "them", "they")
+    if any(token in query_text.lower() for token in follow_up_tokens):
+        return investigation_context.get("matched_group")
+    return None
+
+
+def _bundle_for_top_asset(db, ranked_assets: list[dict]) -> dict:
+    if not ranked_assets:
+        return {}
+    top = ranked_assets[0]
+    hostname = top.get("asset_hostname") or top.get("hostname")
+    return get_asset_evidence_bundle(db, hostname) if hostname else {}
+
+
+def run_exposure_check(db, query_text: str, investigation_context: Optional[dict] = None) -> dict:
+    """Main structured query path for exposure questions."""
+    investigation_context = investigation_context or {}
+    matched_asset = _resolve_focus_asset(db, query_text, investigation_context)
+    matched_group = _resolve_focus_group(db, query_text, investigation_context)
+
+    evidence_bundle = get_asset_evidence_bundle(db, matched_asset) if matched_asset else {}
+    attack_paths = [evidence_bundle] if evidence_bundle else []
+    kg_results: list[dict] = []
+
+    if matched_group:
+        group_results = get_exposure_for_group(db, matched_group)
+        kg_results.append({"type": "group_exposure", "data": group_results})
+        ranked_assets = group_results
+        if not evidence_bundle:
+            evidence_bundle = _bundle_for_top_asset(db, ranked_assets)
+            if evidence_bundle:
+                matched_asset = evidence_bundle.get("hostname")
+                attack_paths = [evidence_bundle]
+    else:
+        ranked_assets = []
+
+    exposure_data = compute_exposure_score(db, matched_asset) if matched_asset else compute_exposure_score(db)
+    if not ranked_assets:
+        ranked_assets = exposure_data.get("assets", [])
+    if not evidence_bundle and ranked_assets:
+        evidence_bundle = _bundle_for_top_asset(db, ranked_assets)
+        if evidence_bundle:
+            attack_paths = [evidence_bundle]
+            matched_asset = matched_asset or evidence_bundle.get("hostname")
+
+    if evidence_bundle:
+        kg_results.append({"type": "asset_evidence", "data": evidence_bundle})
+
+    return {
+        "kg_results": kg_results,
+        "exposure_data": exposure_data,
+        "attack_paths": attack_paths,
+        "ranked_assets": ranked_assets,
+        "matched_group": matched_group,
+        "matched_asset": matched_asset,
+        "evidence_bundle": evidence_bundle,
+    }
+
+
+def run_threat_hunt(db, query_text: str, investigation_context: Optional[dict] = None) -> dict:
+    """Group-centric graph path."""
+    investigation_context = investigation_context or {}
+    matched_group = _resolve_focus_group(db, query_text, investigation_context)
+    if matched_group:
+        group_results = get_exposure_for_group(db, matched_group)
+        evidence_bundle = _bundle_for_top_asset(db, group_results)
+        matched_asset = evidence_bundle.get("hostname") if evidence_bundle else None
+        return {
+            "kg_results": [{"type": "group_exposure", "data": group_results}],
+            "exposure_data": compute_exposure_score(db, matched_asset) if matched_asset else {},
+            "attack_paths": [evidence_bundle] if evidence_bundle else [],
+            "ranked_assets": group_results,
+            "matched_group": matched_group,
+            "matched_asset": matched_asset,
+            "evidence_bundle": evidence_bundle,
+        }
+
+    return {
+        "kg_results": [{"type": "kg_search", "data": search_kg(db, query_text)}],
+        "exposure_data": compute_exposure_score(db),
+        "attack_paths": [],
+        "ranked_assets": compute_exposure_score(db).get("assets", []),
+        "matched_group": None,
+        "matched_asset": None,
+        "evidence_bundle": {},
+    }
+
+
+def run_general_search(db, query_text: str, investigation_context: Optional[dict] = None) -> dict:
+    """Fallback graph search path."""
+    investigation_context = investigation_context or {}
+    matched_asset = _resolve_focus_asset(db, query_text, investigation_context)
+    matched_group = _resolve_focus_group(db, query_text, investigation_context)
+    if matched_group:
+        return run_threat_hunt(db, query_text, investigation_context)
+    evidence_bundle = get_asset_evidence_bundle(db, matched_asset) if matched_asset else {}
+    exposure_data = compute_exposure_score(db, matched_asset) if matched_asset else compute_exposure_score(db)
+    ranked_assets = exposure_data.get("assets", [])
+
+    kg_results = [{"type": "kg_search", "data": search_kg(db, query_text)}]
+    if evidence_bundle:
+        kg_results.append({"type": "asset_evidence", "data": evidence_bundle})
+    elif ranked_assets:
+        evidence_bundle = _bundle_for_top_asset(db, ranked_assets)
+
+    return {
+        "kg_results": kg_results,
+        "exposure_data": exposure_data,
+        "attack_paths": [evidence_bundle] if evidence_bundle else [],
+        "ranked_assets": ranked_assets,
+        "matched_group": matched_group,
+        "matched_asset": matched_asset or evidence_bundle.get("hostname") if evidence_bundle else matched_asset,
+        "evidence_bundle": evidence_bundle,
+    }
+
+
 def execute_kg_queries(state: ThreatGraphState) -> dict:
-    """Execute KG queries based on query type."""
+    """Execute structured KG queries based on query type."""
     db = get_db()
-    query_text = state["query"]
     query_type = state["query_type"]
-    results = []
+    query_text = state["query"]
+    investigation_context = state.get("investigation_context", {})
 
     if query_type == "exposure_check":
-        # Check for specific asset
-        assets_raw = surreal_query(db, "SELECT hostname FROM asset;")
-        hostnames = [a.get("hostname", "").lower() for a in assets_raw]
-        mentioned = None
-        for h in hostnames:
-            if h in query_text.lower():
-                mentioned = h
-                break
-
-        # Check for threat group
-        group_match = re.search(r'apt\s*\d+', query_text.lower())
-        if group_match:
-            gname = group_match.group().replace(" ", "").upper()
-            gdata = get_exposure_for_group(db, gname)
-            results.append({"type": "group_exposure", "data": gdata})
-
-        if mentioned:
-            results.append({"type": "asset_exposure", "data": get_asset_exposure(db, mentioned)})
-
-        exposure = compute_exposure_score(db, mentioned)
-        paths = get_attack_paths(db, mentioned)
-        return {"kg_results": results, "exposure_data": exposure, "attack_paths": paths}
-
-    elif query_type == "threat_hunt":
-        groups = re.findall(r'APT\d+|Lazarus|Fancy Bear|Cozy Bear|Hafnium', query_text, re.IGNORECASE)
-        for g in groups:
-            results.append({"type": "group_profile", "data": get_exposure_for_group(db, g)})
-        results.append({"type": "kg_search", "data": search_kg(db, query_text)})
-        return {"kg_results": results, "exposure_data": compute_exposure_score(db), "attack_paths": []}
-
-    elif query_type == "coverage_gap":
-        results.append({"type": "coverage_gaps", "data": get_coverage_gaps(db)})
-        return {"kg_results": results, "exposure_data": {}, "attack_paths": []}
-
-    else:
-        results.append({"type": "kg_search", "data": search_kg(db, query_text)})
-        exposure = compute_exposure_score(db)
-        return {"kg_results": results, "exposure_data": exposure, "attack_paths": get_attack_paths(db)}
+        return run_exposure_check(db, query_text, investigation_context)
+    if query_type == "threat_hunt":
+        return run_threat_hunt(db, query_text, investigation_context)
+    if query_type == "coverage_gap":
+        return {
+            "kg_results": [{"type": "coverage_gaps", "data": get_coverage_gaps(db)}],
+            "exposure_data": compute_exposure_score(db),
+            "attack_paths": [],
+            "ranked_assets": compute_exposure_score(db).get("assets", []),
+            "matched_group": None,
+            "matched_asset": None,
+            "evidence_bundle": {},
+        }
+    return run_general_search(db, query_text, investigation_context)
 
 
 def handle_cve_alert(state: ThreatGraphState) -> dict:
-    """Handle CVE alerts with NVD lookup + KG blast radius."""
+    """Handle CVE-specific questions with NVD and blast-radius context."""
     db = get_db()
-    cve_ids = re.findall(r'CVE-\d{4}-\d{4,}', state["query"], re.IGNORECASE)
+    cve_ids = re.findall(r"CVE-\d{4}-\d{4,}", state["query"], re.IGNORECASE)
     cve_data = []
 
     for cve_id in cve_ids:
-        cve_id = cve_id.upper()
-        nvd = lookup_cve(cve_id)
-        blast = get_cve_blast_radius(db, cve_id)
-        cve_data.append({"nvd": nvd, "blast_radius": blast})
+        normalized = cve_id.upper()
+        cve_data.append(
+            {
+                "nvd": lookup_cve(normalized),
+                "blast_radius": get_cve_blast_radius(db, normalized),
+            }
+        )
+
+    exposure_data = compute_exposure_score(db)
+    ranked_assets = exposure_data.get("assets", [])
+    evidence_bundle = _bundle_for_top_asset(db, ranked_assets)
+    return {
+        "kg_results": [],
+        "cve_data": cve_data,
+        "exposure_data": exposure_data,
+        "attack_paths": [evidence_bundle] if evidence_bundle else [],
+        "ranked_assets": ranked_assets,
+        "matched_group": None,
+        "matched_asset": evidence_bundle.get("hostname") if evidence_bundle else None,
+        "evidence_bundle": evidence_bundle,
+    }
+
+
+def build_investigation_summary(result: dict) -> dict:
+    """Build a compact persisted summary for follow-up context."""
+    ranked_assets = result.get("ranked_assets", []) or result.get("exposure_data", {}).get("assets", [])
+    top_asset = None
+    if ranked_assets:
+        top_asset = ranked_assets[0].get("asset_hostname") or ranked_assets[0].get("hostname")
+
+    top_cves: list[str] = []
+    evidence_bundle = result.get("evidence_bundle", {})
+    for row in evidence_bundle.get("cves", []):
+        if row.get("cve_id"):
+            top_cves.append(row["cve_id"])
+    top_cves = top_cves[:5]
+
+    ranked_summary = []
+    for asset in ranked_assets[:5]:
+        ranked_summary.append(
+            {
+                "hostname": asset.get("asset_hostname") or asset.get("hostname"),
+                "exposure_score": asset.get("exposure_score"),
+            }
+        )
 
     return {
-        "cve_data": cve_data,
-        "attack_paths": get_attack_paths(db),
-        "exposure_data": compute_exposure_score(db),
-        "kg_results": [],
+        "query_type": result.get("query_type"),
+        "top_asset": top_asset,
+        "matched_group": result.get("matched_group"),
+        "top_cves": top_cves,
+        "recommended_focus": top_asset or result.get("matched_group"),
+        "ranked_assets": ranked_summary,
     }
+
+
+def load_latest_investigation_context(checkpointer, thread_id: str) -> dict:
+    """Load the latest persisted investigation context."""
+    if not checkpointer or not thread_id:
+        return {}
+    try:
+        return checkpointer.get_latest_investigation(thread_id) or {}
+    except Exception:
+        return {}
 
 
 def synthesize_results(state: ThreatGraphState) -> dict:
     """Synthesize results into a threat assessment."""
     llm = _get_llm()
+    context = {
+        "query": state.get("query"),
+        "query_type": state.get("query_type"),
+        "matched_group": state.get("matched_group"),
+        "matched_asset": state.get("matched_asset"),
+        "ranked_assets": state.get("ranked_assets", []),
+        "evidence_bundle": state.get("evidence_bundle", {}),
+        "attack_paths": state.get("attack_paths", []),
+        "cve_data": state.get("cve_data", []),
+        "investigation_context": state.get("investigation_context", {}),
+    }
 
     if llm:
         from langchain_core.messages import HumanMessage, SystemMessage
-        context = json.dumps({
-            "query": state["query"],
-            "type": state["query_type"],
-            "kg": str(state.get("kg_results", []))[:3000],
-            "cve": str(state.get("cve_data", []))[:2000],
-            "exposure": str(state.get("exposure_data", {}))[:1500],
-            "paths": str(state.get("attack_paths", []))[:2000],
-        }, default=str)
 
-        prompt = f"""Based on the following KG data, provide a structured threat assessment:
-
-{context}
-
-Include: 1) Executive Summary 2) Key Findings 3) Risk Assessment 4) Recommended Actions"""
-
+        prompt = (
+            "Summarize the cybersecurity findings using the structured evidence below. "
+            "Call out the most exposed asset first, cite CVEs and ATT&CK context when present, "
+            "and recommend the next investigation focus.\n\n"
+            f"{json.dumps(context, default=str)[:12000]}"
+        )
         result = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
         return {"synthesis": result.content}
-    else:
-        return {"synthesis": _fallback_synthesis(state)}
+    return {"synthesis": _fallback_synthesis(state)}
 
 
 def generate_playbook(state: ThreatGraphState) -> dict:
-    """Generate remediation playbook."""
+    """Generate a remediation playbook."""
     llm = _get_llm()
+    evidence_bundle = state.get("evidence_bundle", {})
+    focus_asset = state.get("matched_asset") or evidence_bundle.get("hostname")
 
-    if llm and state.get("attack_paths"):
+    if llm and (evidence_bundle or state.get("attack_paths")):
         from langchain_core.messages import HumanMessage, SystemMessage
-        prompt = f"""Generate a remediation playbook for:
 
-{state.get('synthesis', '')[:2000]}
-
-Include: 1) IMMEDIATE Actions 2) Detection Rules (Sigma format) 3) MITRE Mitigations 4) Long-term"""
-
+        prompt = (
+            "Generate a remediation playbook for the focus asset using the evidence below. "
+            "Prioritize patching, containment, and detection recommendations.\n\n"
+            f"{json.dumps({'focus_asset': focus_asset, 'evidence_bundle': evidence_bundle}, default=str)[:12000]}"
+        )
         result = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
         return {"playbook": result.content}
-    else:
-        return {"playbook": _fallback_playbook(state)}
+    return {"playbook": _fallback_playbook(state)}
 
-
-# ─── ROUTING ──────────────────────────────────────────
 
 def route_by_type(state: ThreatGraphState) -> str:
     return "cve_lookup" if state["query_type"] == "cve_alert" else "kg_query"
 
 
-# ─── FALLBACK (NO LLM) ───────────────────────────────
-
 def _fallback_synthesis(state: ThreatGraphState) -> str:
-    lines = ["# ThreatGraph Assessment\n"]
-    lines.append(f"**Query**: {state['query']}")
-    lines.append(f"**Type**: {state['query_type']}\n")
+    lines = ["# ThreatGraph Assessment", ""]
+    lines.append(f"Query: {state.get('query', '')}")
+    lines.append(f"Type: {state.get('query_type', '')}")
 
-    exposure = state.get("exposure_data", {})
-    if exposure and exposure.get("assets"):
-        lines.append("## Exposure Summary\n")
-        for a in exposure["assets"]:
-            risk = "🔴 CRITICAL" if a["exposure_score"] > 100 else "🟠 HIGH" if a["exposure_score"] > 50 else "🟡 MEDIUM"
-            lines.append(f"- **{a['hostname']}** ({a['criticality']}): Score **{a['exposure_score']}** {risk}")
-            lines.append(f"  - {a['cve_count']} CVEs, max CVSS {a['max_cvss']}, {a['kev_count']} actively exploited")
-        lines.append(f"\n**Total Org Score**: {exposure.get('total_score', 0)}")
+    context = state.get("investigation_context", {})
+    if context:
+        lines.append("")
+        lines.append("Prior context:")
+        if context.get("top_asset"):
+            lines.append(f"- Prior top asset: {context['top_asset']}")
+        if context.get("matched_group"):
+            lines.append(f"- Prior group: {context['matched_group']}")
 
-    cve_data = state.get("cve_data", [])
-    if cve_data:
-        lines.append("\n## CVE Details\n")
-        for item in cve_data:
-            nvd = item.get("nvd", {})
-            lines.append(f"### {nvd.get('cve_id', 'N/A')}")
-            lines.append(f"- **CVSS**: {nvd.get('cvss_score', 'N/A')} ({nvd.get('severity', 'N/A')})")
-            lines.append(f"- {nvd.get('description', 'No description')[:300]}")
-            blast = item.get("blast_radius", [])
-            for b in blast:
-                assets = b.get("affected_assets", [])
-                if assets:
-                    flat = assets if isinstance(assets, list) else [assets]
-                    lines.append(f"- **Affected**: {', '.join(str(a) for a in flat)}")
+    ranked_assets = state.get("ranked_assets", [])
+    if ranked_assets:
+        lines.append("")
+        lines.append("Ranked assets:")
+        for asset in ranked_assets[:5]:
+            hostname = asset.get("asset_hostname") or asset.get("hostname")
+            lines.append(f"- {hostname}: score {asset.get('exposure_score')}")
 
-    kgr = state.get("kg_results", [])
-    if kgr:
-        lines.append("\n## KG Findings\n")
-        for r in kgr[:5]:
-            rtype = r.get("type", "")
-            data = r.get("data", [])
-            if data:
-                lines.append(f"### {rtype}")
-                for item in (data[:3] if isinstance(data, list) else [data]):
-                    if isinstance(item, dict) and not item.get("error"):
-                        name = item.get("name") or item.get("group_name") or item.get("cve_id") or ""
-                        lines.append(f"- {name}: {json.dumps(item, default=str)[:200]}")
+    evidence_bundle = state.get("evidence_bundle", {})
+    if evidence_bundle:
+        lines.append("")
+        lines.append(f"Focus asset: {evidence_bundle.get('hostname')}")
+        cves = [row.get("cve_id") for row in evidence_bundle.get("cves", []) if row.get("cve_id")]
+        software = [row.get("name") for row in evidence_bundle.get("attack_software", []) if row.get("name")]
+        groups = [row.get("name") for row in evidence_bundle.get("threat_groups", []) if row.get("name")]
+        if cves:
+            lines.append(f"- CVEs: {', '.join(cves[:5])}")
+        if software:
+            lines.append(f"- ATT&CK software: {', '.join(software[:5])}")
+        if groups:
+            lines.append(f"- Threat groups: {', '.join(groups[:5])}")
 
     return "\n".join(lines)
 
 
 def _fallback_playbook(state: ThreatGraphState) -> str:
-    lines = ["# Remediation Playbook\n"]
-    lines.append("## 🚨 Immediate Actions\n")
-    exposure = state.get("exposure_data", {})
-    for a in exposure.get("assets", [])[:5]:
-        if a.get("cve_count", 0) > 0:
-            lines.append(f"- **{a['hostname']}**: Patch {a['cve_count']} CVEs (max CVSS: {a['max_cvss']})")
-            if a.get("kev_count", 0) > 0:
-                lines.append(f"  ⚠️ **{a['kev_count']} actively exploited — PATCH IMMEDIATELY**")
+    evidence_bundle = state.get("evidence_bundle", {})
+    focus_asset = state.get("matched_asset") or evidence_bundle.get("hostname") or "the top-ranked asset"
+    cves = [row.get("cve_id") for row in evidence_bundle.get("cves", []) if row.get("cve_id")]
 
-    lines.append("\n## 🔎 Detection Rules (Sigma Format)\n")
-    lines.append("```yaml")
-    lines.append("title: Suspicious Process Execution on Critical Assets")
-    lines.append("status: experimental")
-    lines.append("description: Detects potential exploitation attempts on ThreatGraph-monitored assets")
-    lines.append("logsource:")
-    lines.append("    category: process_creation")
-    lines.append("    product: linux")
-    lines.append("detection:")
-    lines.append("    selection:")
-    lines.append("        CommandLine|contains:")
-    lines.append("            - '/etc/passwd'")
-    lines.append("            - 'curl|wget|nc '")
-    lines.append("            - '${jndi:'  # Log4Shell")
-    lines.append("    condition: selection")
-    lines.append("level: high")
-    lines.append("tags:")
-    lines.append("    - attack.initial_access")
-    lines.append("    - attack.t1190")
-    lines.append("```")
+    lines = ["# Remediation Playbook", ""]
+    lines.append(f"Focus asset: {focus_asset}")
     lines.append("")
-    lines.append("```yaml")
-    lines.append("title: Web Shell Access Detection")
-    lines.append("status: experimental")
-    lines.append("description: Detects access patterns matching web shell exploitation")
-    lines.append("logsource:")
-    lines.append("    category: webserver")
-    lines.append("    product: apache")
-    lines.append("detection:")
-    lines.append("    selection:")
-    lines.append("        cs-uri-query|contains:")
-    lines.append("            - 'cmd='")
-    lines.append("            - 'exec='")
-    lines.append("            - '..%2f..%2f'  # Path traversal")
-    lines.append("    condition: selection")
-    lines.append("level: critical")
-    lines.append("tags:")
-    lines.append("    - attack.persistence")
-    lines.append("    - attack.t1505.003")
-    lines.append("```")
-
-    lines.append("\n## 🛡️ MITRE Mitigations\n")
-    lines.append("- **M1048** Application Isolation and Sandboxing")
-    lines.append("- **M1050** Exploit Protection (ASLR, DEP, CFG)")
-    lines.append("- **M1030** Network Segmentation — isolate DMZ from internal")
-    lines.append("- **M1026** Privileged Account Management")
-
-    lines.append("\n## 📋 Long-term\n")
-    lines.append("- Implement automated vulnerability scanning (Nessus/Qualys)")
-    lines.append("- Establish patch management SLAs: KEV=24h, Critical=72h, High=7d")
-    lines.append("- Deploy WAF on all public-facing assets")
-    lines.append("- Map detection capabilities to MITRE ATT&CK for gap analysis")
-    lines.append("- Enable SIEM correlation for cross-asset attack chain detection")
-
+    lines.append("Immediate actions:")
+    if cves:
+        lines.append(f"- Patch or mitigate these CVEs first: {', '.join(cves[:5])}")
+    else:
+        lines.append("- Isolate the asset for validation and review installed software against ATT&CK-linked tooling.")
+    lines.append("- Review outbound connectivity and disable unnecessary admin tools or tunnels.")
+    lines.append("- Validate detections for the mapped ATT&CK techniques and threat groups.")
+    lines.append("")
+    lines.append("Detection ideas:")
+    lines.append("- Alert on suspicious service creation, remote execution, or unexpected tunnel processes.")
+    lines.append("- Review process starts and network connections for ATT&CK-linked software on the focus asset.")
+    lines.append("")
+    lines.append("Long-term:")
+    lines.append("- Add recurring software inventory validation and CVE correlation to the ingest pipeline.")
+    lines.append("- Track follow-up investigations by reusing the same thread ID.")
     return "\n".join(lines)
 
-
-# ─── BUILD GRAPH ──────────────────────────────────────
 
 def build_workflow(checkpointer=None):
     """Build and compile the ThreatGraph LangGraph workflow."""
     workflow = StateGraph(ThreatGraphState)
-
     workflow.add_node("classify", classify_query)
     workflow.add_node("kg_query", execute_kg_queries)
     workflow.add_node("cve_lookup", handle_cve_alert)
@@ -321,10 +514,11 @@ def build_workflow(checkpointer=None):
     workflow.add_node("playbook", generate_playbook)
 
     workflow.set_entry_point("classify")
-    workflow.add_conditional_edges("classify", route_by_type, {
-        "kg_query": "kg_query",
-        "cve_lookup": "cve_lookup",
-    })
+    workflow.add_conditional_edges(
+        "classify",
+        route_by_type,
+        {"kg_query": "kg_query", "cve_lookup": "cve_lookup"},
+    )
     workflow.add_edge("kg_query", "synthesize")
     workflow.add_edge("cve_lookup", "synthesize")
     workflow.add_edge("synthesize", "playbook")
@@ -336,96 +530,96 @@ def build_workflow(checkpointer=None):
     return workflow.compile(**compile_kwargs)
 
 
-def run_query(query: str, thread_id: str = None) -> dict:
-    """Run a query through the ThreatGraph agent (sync).
-    
-    If thread_id is provided, uses SurrealDB checkpointing for session persistence.
-    """
-    import uuid
-
-    # Try to use SurrealDB checkpointer
-    checkpointer = None
+def _build_checkpointer():
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    toolkit_path = os.path.join(repo_root, "toolkit")
+    if toolkit_path not in sys.path:
+        sys.path.insert(0, toolkit_path)
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "toolkit"))
         from langchain_surrealdb_mitre.checkpointer import SurrealCheckpointer
-        checkpointer = SurrealCheckpointer()
-    except Exception:
-        pass
 
+        return SurrealCheckpointer()
+    except Exception:
+        return None
+
+
+def run_query(query: str, thread_id: str = None) -> dict:
+    """Run a query through the ThreatGraph workflow with optional persistence."""
+    effective_thread_id = thread_id or str(uuid.uuid4())
+    checkpointer = _build_checkpointer()
+    investigation_context = load_latest_investigation_context(checkpointer, effective_thread_id)
     app = build_workflow(checkpointer=checkpointer)
 
-    initial = {
+    initial_state: ThreatGraphState = {
         "query": query,
+        "thread_id": effective_thread_id,
         "query_type": "",
         "kg_results": [],
         "cve_data": [],
         "exposure_data": {},
         "attack_paths": [],
+        "ranked_assets": [],
+        "evidence_bundle": {},
+        "matched_group": investigation_context.get("matched_group"),
+        "matched_asset": investigation_context.get("top_asset"),
+        "investigation_context": investigation_context,
         "synthesis": "",
         "playbook": "",
     }
 
     invoke_kwargs = {}
-    if checkpointer and thread_id:
-        invoke_kwargs["config"] = {"configurable": {"thread_id": thread_id}}
+    if checkpointer:
+        invoke_kwargs["config"] = {
+            "configurable": {"thread_id": effective_thread_id, "checkpoint_ns": "threatgraph"}
+        }
 
-    result = app.invoke(initial, **invoke_kwargs)
+    result = app.invoke(initial_state, **invoke_kwargs)
 
-    # Save investigation to audit trail
     if checkpointer:
         try:
-            checkpointer.save_investigation(
-                thread_id=thread_id or str(uuid.uuid4()),
-                query=query,
-                findings={
-                    "query_type": result["query_type"],
-                    "synthesis_preview": result["synthesis"][:500],
-                    "asset_count": len(result.get("exposure_data", {}).get("assets", [])),
-                }
-            )
+            summary = build_investigation_summary(result)
+            checkpointer.save_investigation(effective_thread_id, query, summary)
         except Exception:
             pass
 
     return {
-        "query": result["query"],
-        "query_type": result["query_type"],
-        "synthesis": result["synthesis"],
-        "playbook": result["playbook"],
+        "query": result.get("query", query),
+        "thread_id": effective_thread_id,
+        "query_type": result.get("query_type"),
+        "synthesis": result.get("synthesis", ""),
+        "playbook": result.get("playbook", ""),
+        "kg_results": result.get("kg_results", []),
+        "cve_data": result.get("cve_data", []),
         "exposure_data": result.get("exposure_data", {}),
+        "attack_paths": result.get("attack_paths", []),
+        "ranked_assets": result.get("ranked_assets", []),
+        "matched_group": result.get("matched_group"),
+        "matched_asset": result.get("matched_asset"),
+        "evidence_bundle": result.get("evidence_bundle", {}),
+        "investigation_context": investigation_context,
     }
 
-
-# ─── CLI ──────────────────────────────────────────────
 
 def cli_main():
     """Interactive CLI for ThreatGraph."""
     print("=" * 60)
-    print("  🛡️  ThreatGraph — AI Cybersecurity Analyst")
+    print("  ThreatGraph — AI Cybersecurity Analyst")
     print("=" * 60)
-    print("\nType your security question (or 'quit' to exit):\n")
 
     while True:
         try:
-            query = input("🔍 > ").strip()
+            query = input("threatgraph> ").strip()
         except (EOFError, KeyboardInterrupt):
             break
 
-        if query.lower() in ("quit", "exit", "q"):
+        if query.lower() in {"quit", "exit", "q"}:
             break
         if not query:
             continue
 
-        print(f"\n⏳ Analyzing: {query}\n")
         result = run_query(query)
-
-        print(f"📋 Query Type: {result['query_type']}")
-        print("\n" + "─" * 60)
-        print("📊 THREAT ASSESSMENT")
-        print("─" * 60)
         print(result["synthesis"])
-        print("\n" + "─" * 60)
-        print("🔧 REMEDIATION PLAYBOOK")
-        print("─" * 60)
+        print()
         print(result["playbook"])
         print()
 

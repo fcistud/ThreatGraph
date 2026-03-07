@@ -1,16 +1,35 @@
-"""Master ingestion script — runs the full ThreatGraph data pipeline (sync)."""
+"""Master ingestion script for the ThreatGraph core pipeline."""
 
-import sys
+from __future__ import annotations
+
 import os
+import sys
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.database import get_db, init_schema, get_stats
-from src.ingestion.attack_loader import ingest_attack, load_cisa_kev
+from src.config import ATTACK_STIX_PATH
+from src.database import get_db, get_stats, init_schema
 from src.ingestion.asset_seeder import seed_assets
+from src.ingestion.attack_loader import ingest_attack
 from src.ingestion.cve_correlator import correlate_cves
-from src.config import ATTACK_STIX_PATH, CISA_KEV_PATH
+from src.ingestion.software_linker import link_software_versions
+
+
+def run_full_ingest(db) -> dict:
+    """Execute the full ingest pipeline in the correct order."""
+    schema = init_schema(db)
+    attack_map = ingest_attack(db, ATTACK_STIX_PATH)
+    assets = seed_assets(db, reset=True)
+    software_links = link_software_versions(db)
+    cves = correlate_cves(db, use_cache=True, max_results_per_cpe=50)
+    return {
+        "schema": schema,
+        "attack": {"objects": len(attack_map)},
+        "assets": assets,
+        "software_links": software_links,
+        "cves": cves,
+    }
 
 
 def main():
@@ -22,56 +41,32 @@ def main():
     db = get_db()
     print("\n✓ Connected to SurrealDB")
 
-    print("\n── Phase 1: Schema ──")
-    init_schema(db)
-    print("✓ Schema initialized")
+    results = run_full_ingest(db)
 
-    print("\n── Phase 2: MITRE ATT&CK ──")
-    stix_map = ingest_attack(db, ATTACK_STIX_PATH)
-    print(f"✓ ATT&CK ingested ({len(stix_map)} objects)")
+    print("\n── Ingest Summary ──")
+    for stage, payload in results.items():
+        print(f"{stage:>16}: {payload}")
 
-    print("\n── Phase 3: CISA KEV ──")
-    kev_cves = load_cisa_kev(CISA_KEV_PATH)
-    print(f"✓ KEV loaded ({len(kev_cves)} CVEs)")
-
-    print("\n── Phase 4: Assets ──")
-    seed_assets(db)
-    print("✓ Assets seeded")
-
-    print("\n── Phase 5: CVE Correlation ──")
-    correlate_cves(db)
-    print("✓ CVE correlation complete")
-
-    print("\n" + "=" * 60)
-    print("  Knowledge Graph Summary")
-    print("=" * 60)
     stats = get_stats(db)
+    print("\n── Graph Stats ──")
+    for table in (
+        "technique",
+        "tactic",
+        "threat_group",
+        "software",
+        "asset",
+        "software_version",
+        "cve",
+        "employs",
+        "uses",
+        "runs",
+        "linked_to_software",
+        "has_cve",
+        "affects",
+    ):
+        print(f"{table:>16}: {stats.get(table, 0)}")
 
-    node_tables = ["technique", "tactic", "threat_group", "software", "mitigation",
-                   "campaign", "data_source", "asset", "software_version", "cve"]
-    edge_tables = ["uses", "belongs_to", "employs", "mitigates", "subtechnique_of",
-                   "runs", "has_cve", "affects", "linked_to_software"]
-
-    total_nodes = 0
-    total_edges = 0
-
-    print("\n  NODES:")
-    for t in node_tables:
-        c = stats.get(t, 0)
-        if c > 0:
-            print(f"    {t:25s} {c:>6}")
-            total_nodes += c
-
-    print(f"\n  EDGES:")
-    for t in edge_tables:
-        c = stats.get(t, 0)
-        if c > 0:
-            print(f"    {t:25s} {c:>6}")
-            total_edges += c
-
-    print(f"\n  TOTAL NODES: {total_nodes}")
-    print(f"  TOTAL EDGES: {total_edges}")
-    print(f"\n  Time: {time.time() - start:.1f}s")
+    print(f"\nTotal time: {time.time() - start:.1f}s")
     print("=" * 60)
 
 
