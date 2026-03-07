@@ -1232,33 +1232,55 @@ with tab7:
         <div class="section-icon" style="background:rgba(139,92,246,0.15);">💻</div>
         <div>
             <div class="section-title">Code Awareness (Layer 3)</div>
-            <div class="section-desc">Scan any codebase to map its dependency graph and cross-reference with known vulnerabilities</div>
+            <div class="section-desc">Scan any codebase — local or GitHub — to map dependencies and cross-reference with known vulnerabilities</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("""
     <div class="info-callout">
-        <strong>How it works:</strong> Point this at any project directory. It parses Python, JavaScript, and TypeScript files 
-        using AST analysis to extract imports, classes, and functions. It also reads <code>requirements.txt</code> and 
-        <code>package.json</code> for dependencies. These are loaded into the knowledge graph and cross-linked to known 
-        vulnerable software — if your code depends on a library with known CVEs, you'll see warnings below.
+        <strong>How it works:</strong> Paste a <strong>GitHub URL</strong> (e.g. <code>https://github.com/user/repo</code>) or a local path. 
+        ThreatGraph auto-clones the repo, parses Python/JS/TS files using AST analysis, reads dependency files 
+        (<code>requirements.txt</code>, <code>package.json</code>, <code>go.mod</code>, <code>Cargo.toml</code>), 
+        loads everything into the knowledge graph, and cross-links dependencies to known vulnerable software versions with CVEs.
     </div>
     """, unsafe_allow_html=True)
 
-    repo_path = st.text_input("📁 Repository path", value="/Users/mariamhassan/langchain/threatgraph",
-                               help="Absolute path to the codebase you want to scan")
+    scan_mode = st.radio("Scan source", ["🌐 GitHub URL", "📁 Local path"], horizontal=True)
 
-    if st.button("🔍 Scan Codebase", type="primary") and repo_path:
-        with st.spinner("Scanning codebase and building dependency graph..."):
+    if scan_mode == "🌐 GitHub URL":
+        repo_input = st.text_input("🔗 GitHub repository URL",
+                                    placeholder="https://github.com/pallets/flask",
+                                    help="Public GitHub/GitLab/Bitbucket URL — will be cloned automatically")
+    else:
+        repo_input = st.text_input("📁 Local repository path",
+                                    value=os.path.dirname(os.path.abspath(__file__)),
+                                    help="Absolute path to a local codebase")
+
+    if st.button("🔍 Scan & Analyze", type="primary") and repo_input:
+        with st.spinner("🔄 Scanning codebase and building dependency graph..."):
             try:
-                from src.ingestion.code_scanner import ingest_codebase
+                from src.ingestion.code_scanner import ingest_codebase, clone_github_repo, is_github_url
                 db = get_db()
-                result = ingest_codebase(db, repo_path)
 
+                # Auto-clone if GitHub URL
+                scan_path = repo_input
+                cloned = False
+                if is_github_url(repo_input):
+                    with st.status("Cloning repository...", expanded=True) as status:
+                        st.write(f"📡 Cloning `{repo_input}`...")
+                        scan_path = clone_github_repo(repo_input)
+                        st.write(f"✅ Cloned to `{scan_path}`")
+                        status.update(label="Repository cloned!", state="complete")
+                        cloned = True
+
+                result = ingest_codebase(db, scan_path)
+
+                # Summary stats
                 st.markdown(f"""
                 <div class="stat-grid">
-                    <div class="stat-card"><div class="stat-value">{result['total_files']}</div><div class="stat-label">Files</div></div>
+                    <div class="stat-card"><div class="stat-value">{result['repo']}</div><div class="stat-label">Repository</div></div>
+                    <div class="stat-card"><div class="stat-value">{result['total_files']}</div><div class="stat-label">Files Scanned</div></div>
                     <div class="stat-card"><div class="stat-value">{result['total_loc']:,}</div><div class="stat-label">Lines of Code</div></div>
                     <div class="stat-card"><div class="stat-value">{len(result['dependencies'])}</div><div class="stat-label">Dependencies</div></div>
                 </div>
@@ -1300,15 +1322,22 @@ with tab7:
                                 found = True
                                 st.markdown(f"""
                                 <div class="warn-callout">
-                                    📦 <strong>{dep['name']}</strong> (your dependency) matches asset software 
-                                    <strong>{sw_info.get('name')} {sw_info.get('version')}</strong> — this software has known CVEs! 
-                                    Check the Exposure tab for details.
+                                    ⚠️ <strong>{dep['name']}</strong> (dependency) matches vulnerable software 
+                                    <strong>{sw_info.get('name')} {sw_info.get('version')}</strong> in the knowledge graph — 
+                                    this version has known CVEs! Check the Exposure tab.
                                 </div>
                                 """, unsafe_allow_html=True)
                     if not found:
                         st.success("✅ No direct dependency-to-vulnerable-software matches found.")
+
+                # Cleanup cloned repo
+                if cloned and os.path.exists(scan_path):
+                    import shutil
+                    shutil.rmtree(scan_path, ignore_errors=True)
+
             except Exception as e:
                 st.error(f"Error: {e}")
+
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

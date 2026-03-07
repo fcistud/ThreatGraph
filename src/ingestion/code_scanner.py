@@ -2,11 +2,12 @@
 
 Builds Layer 3 of the ThreatGraph knowledge graph:
 - code_module nodes (files with classes/functions)
-- dependency nodes (from requirements.txt, package.json, etc.)
+- dependency nodes (from requirements.txt, package.json, go.mod, Cargo.toml, etc.)
 - imports edges (code_module → code_module)
 - depends_on edges (project → dependency)
 - deployed_on edges (dependency → asset via software_version)
 
+Supports scanning local directories OR GitHub URLs (auto-clones).
 Inspired by GitNexus (https://github.com/abhigyanpatwari/GitNexus).
 """
 
@@ -15,10 +16,47 @@ import re
 import json
 import sys
 import ast
+import shutil
+import subprocess
+import tempfile
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from src.database import get_db
+
+
+def clone_github_repo(url: str) -> str:
+    """Clone a GitHub repo to a temp directory. Returns the path."""
+    # Normalize URL
+    url = url.strip().rstrip("/")
+    if not url.startswith("http"):
+        url = f"https://github.com/{url}"
+    if url.endswith(".git"):
+        url = url[:-4]
+
+    repo_name = url.split("/")[-1]
+    tmp_dir = os.path.join(tempfile.gettempdir(), f"threatgraph_scan_{repo_name}")
+
+    # Clean old clone if exists
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+
+    print(f"  Cloning {url} → {tmp_dir}")
+    result = subprocess.run(
+        ["git", "clone", "--depth", "1", url, tmp_dir],
+        capture_output=True, text=True, timeout=60
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Git clone failed: {result.stderr.strip()}")
+
+    return tmp_dir
+
+
+def is_github_url(path: str) -> bool:
+    """Check if a path looks like a GitHub URL."""
+    return any(x in path for x in ["github.com", "gitlab.com", "bitbucket.org"])
+
+
 
 
 # ─── FILE PARSERS ─────────────────────────────────────

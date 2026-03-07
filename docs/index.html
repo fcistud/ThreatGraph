@@ -1,12 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ThreatGraph — AI-Powered Cybersecurity Analyst</title>
-    <meta name="description" content="ThreatGraph is an AI-powered cybersecurity analyst that uses MITRE ATT&CK knowledge graphs, SurrealDB, and LangGraph agents to map attack paths and generate remediation playbooks.">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
-    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Fira+Code:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <meta name="description"
+        content="ThreatGraph is an AI-powered cybersecurity analyst that uses MITRE ATT&CK knowledge graphs, SurrealDB, and LangGraph agents to map attack paths and generate remediation playbooks.">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Fira+Code:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
     <style>
         :root {
             --bg-void: #0A0A0F;
@@ -22,7 +27,13 @@
             --alert-red: #FF3333;
             --neon-amber: #FFB800;
         }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
             font-family: 'Fira Code', monospace;
             background: var(--bg-void);
@@ -30,34 +41,50 @@
             line-height: 1.7;
             overflow-x: hidden;
         }
+
         body::after {
             content: '';
             position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,65,0.02) 2px, rgba(0,255,65,0.02) 4px);
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 255, 65, 0.02) 2px, rgba(0, 255, 65, 0.02) 4px);
             pointer-events: none;
             z-index: 9999;
         }
 
         /* ── Nav ── */
         nav {
-            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
             background: rgba(10, 10, 15, 0.95);
             border-bottom: 1px solid var(--border-neon);
             backdrop-filter: blur(10px);
             padding: 0.8rem 2rem;
-            display: flex; align-items: center; justify-content: space-between;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
+
         .nav-brand {
             font-family: 'Share Tech Mono', monospace;
             font-size: 1.2rem;
             color: var(--neon-green);
-            text-shadow: 0 0 15px rgba(0,255,65,0.4);
+            text-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
             text-decoration: none;
             letter-spacing: 2px;
             text-transform: uppercase;
         }
-        .nav-links { display: flex; gap: 1.5rem; }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+        }
+
         .nav-links a {
             font-family: 'Share Tech Mono', monospace;
             font-size: 0.75rem;
@@ -67,106 +94,178 @@
             letter-spacing: 1px;
             transition: color 0.3s, text-shadow 0.3s;
         }
-        .nav-links a:hover { color: var(--neon-green); text-shadow: 0 0 10px rgba(0,255,65,0.4); }
+
+        .nav-links a:hover {
+            color: var(--neon-green);
+            text-shadow: 0 0 10px rgba(0, 255, 65, 0.4);
+        }
 
         /* ── Hero ── */
         .hero {
             min-height: 100vh;
-            display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            text-align: center; padding: 4rem 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 4rem 2rem;
             position: relative;
         }
+
         .hero::before {
             content: '';
-            position: absolute; inset: 0;
-            background: radial-gradient(ellipse at 50% 50%, rgba(0,255,65,0.05) 0%, transparent 70%);
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(ellipse at 50% 50%, rgba(0, 255, 65, 0.05) 0%, transparent 70%);
         }
+
         .hero-shield {
-            width: 80px; height: 80px;
+            width: 80px;
+            height: 80px;
             border: 2px solid var(--neon-green);
-            display: flex; align-items: center; justify-content: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-size: 2.5rem;
             margin-bottom: 2rem;
             position: relative;
-            box-shadow: 0 0 30px rgba(0,255,65,0.2);
+            box-shadow: 0 0 30px rgba(0, 255, 65, 0.2);
         }
-        .hero-shield::before, .hero-shield::after {
-            content: ''; position: absolute; width: 10px; height: 10px;
+
+        .hero-shield::before,
+        .hero-shield::after {
+            content: '';
+            position: absolute;
+            width: 10px;
+            height: 10px;
         }
-        .hero-shield::before { top: -1px; left: -1px; border-top: 2px solid var(--neon-green); border-left: 2px solid var(--neon-green); }
-        .hero-shield::after { bottom: -1px; right: -1px; border-bottom: 2px solid var(--neon-green); border-right: 2px solid var(--neon-green); }
+
+        .hero-shield::before {
+            top: -1px;
+            left: -1px;
+            border-top: 2px solid var(--neon-green);
+            border-left: 2px solid var(--neon-green);
+        }
+
+        .hero-shield::after {
+            bottom: -1px;
+            right: -1px;
+            border-bottom: 2px solid var(--neon-green);
+            border-right: 2px solid var(--neon-green);
+        }
+
         .hero h1 {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 4rem; font-weight: 400;
+            font-size: 4rem;
+            font-weight: 400;
             color: var(--neon-green);
-            text-shadow: 0 0 40px rgba(0,255,65,0.5), 0 0 80px rgba(0,255,65,0.2);
+            text-shadow: 0 0 40px rgba(0, 255, 65, 0.5), 0 0 80px rgba(0, 255, 65, 0.2);
             letter-spacing: 4px;
             text-transform: uppercase;
             margin-bottom: 1rem;
         }
+
         .hero .subtitle {
-            font-size: 1rem; color: var(--text-secondary);
-            max-width: 700px; margin-bottom: 2rem;
+            font-size: 1rem;
+            color: var(--text-secondary);
+            max-width: 700px;
+            margin-bottom: 2rem;
         }
+
         .hero-badges {
-            display: flex; gap: 0.8rem; flex-wrap: wrap;
-            justify-content: center; margin-bottom: 3rem;
+            display: flex;
+            gap: 0.8rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-bottom: 3rem;
         }
+
         .hero-badge {
-            background: rgba(0,255,65,0.05);
+            background: rgba(0, 255, 65, 0.05);
             border: 1px solid var(--border-neon);
             padding: 0.3rem 1rem;
             font-family: 'Share Tech Mono', monospace;
-            font-size: 0.7rem; color: var(--neon-green);
-            text-transform: uppercase; letter-spacing: 1px;
+            font-size: 0.7rem;
+            color: var(--neon-green);
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
-        .cta-group { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; }
+
+        .cta-group {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
         .cta-primary {
-            background: rgba(0,255,65,0.1);
+            background: rgba(0, 255, 65, 0.1);
             border: 1px solid var(--neon-green);
             padding: 0.8rem 2rem;
             font-family: 'Share Tech Mono', monospace;
-            font-size: 0.85rem; color: var(--neon-green);
-            text-decoration: none; text-transform: uppercase;
+            font-size: 0.85rem;
+            color: var(--neon-green);
+            text-decoration: none;
+            text-transform: uppercase;
             letter-spacing: 1px;
             transition: all 0.3s;
         }
+
         .cta-primary:hover {
-            background: rgba(0,255,65,0.2);
-            box-shadow: 0 0 30px rgba(0,255,65,0.3);
+            background: rgba(0, 255, 65, 0.2);
+            box-shadow: 0 0 30px rgba(0, 255, 65, 0.3);
         }
+
         .cta-secondary {
             border: 1px solid var(--border-neon);
             padding: 0.8rem 2rem;
             font-family: 'Share Tech Mono', monospace;
-            font-size: 0.85rem; color: var(--text-secondary);
-            text-decoration: none; text-transform: uppercase;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            text-transform: uppercase;
             letter-spacing: 1px;
             transition: all 0.3s;
         }
-        .cta-secondary:hover { border-color: var(--neon-cyan); color: var(--neon-cyan); }
+
+        .cta-secondary:hover {
+            border-color: var(--neon-cyan);
+            color: var(--neon-cyan);
+        }
 
         /* ── Sections ── */
-        section { padding: 5rem 2rem; max-width: 1200px; margin: 0 auto; }
+        section {
+            padding: 5rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
         .section-label {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 0.7rem; color: var(--neon-cyan);
-            text-transform: uppercase; letter-spacing: 3px;
+            font-size: 0.7rem;
+            color: var(--neon-cyan);
+            text-transform: uppercase;
+            letter-spacing: 3px;
             margin-bottom: 0.5rem;
         }
+
         h2 {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 1.8rem; font-weight: 400;
+            font-size: 1.8rem;
+            font-weight: 400;
             color: var(--neon-green);
-            text-shadow: 0 0 20px rgba(0,255,65,0.3);
-            text-transform: uppercase; letter-spacing: 2px;
+            text-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+            text-transform: uppercase;
+            letter-spacing: 2px;
             margin-bottom: 1rem;
         }
+
         h3 {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 1rem; color: var(--neon-green);
-            text-transform: uppercase; letter-spacing: 1px;
+            font-size: 1rem;
+            color: var(--neon-green);
+            text-transform: uppercase;
+            letter-spacing: 1px;
             margin-bottom: 0.8rem;
         }
 
@@ -174,8 +273,10 @@
         .feature-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem; margin-top: 2rem;
+            gap: 1.5rem;
+            margin-top: 2rem;
         }
+
         .feature-card {
             background: var(--bg-card);
             border: 1px solid var(--border-neon);
@@ -183,266 +284,392 @@
             position: relative;
             transition: border-color 0.3s, box-shadow 0.3s;
         }
+
         .feature-card::before {
-            content: ''; position: absolute; top: 0; left: 0;
-            width: 6px; height: 6px;
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 6px;
+            height: 6px;
             border-top: 1px solid var(--neon-green);
             border-left: 1px solid var(--neon-green);
         }
+
         .feature-card::after {
-            content: ''; position: absolute; bottom: 0; right: 0;
-            width: 6px; height: 6px;
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 6px;
+            height: 6px;
             border-bottom: 1px solid var(--neon-green);
             border-right: 1px solid var(--neon-green);
         }
+
         .feature-card:hover {
             border-color: var(--border-glow);
-            box-shadow: 0 0 20px rgba(0,255,65,0.08);
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.08);
         }
+
         .feature-icon {
-            font-size: 2rem; margin-bottom: 1rem;
-            text-shadow: 0 0 15px rgba(0,255,65,0.3);
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            text-shadow: 0 0 15px rgba(0, 255, 65, 0.3);
         }
+
         .feature-card p {
-            font-size: 0.8rem; color: var(--text-secondary);
+            font-size: 0.8rem;
+            color: var(--text-secondary);
             line-height: 1.7;
         }
 
         /* ── Architecture ── */
         .arch-layers {
-            display: flex; flex-direction: column; gap: 1px;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
             margin-top: 2rem;
             border: 1px solid var(--border-neon);
         }
+
         .arch-layer {
             background: var(--bg-card);
             padding: 1.5rem 2rem;
-            display: flex; align-items: center; gap: 1.5rem;
-            border-bottom: 1px solid rgba(0,255,65,0.1);
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            border-bottom: 1px solid rgba(0, 255, 65, 0.1);
         }
-        .arch-layer:last-child { border-bottom: none; }
+
+        .arch-layer:last-child {
+            border-bottom: none;
+        }
+
         .arch-num {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 1.5rem; color: var(--neon-green);
-            text-shadow: 0 0 10px rgba(0,255,65,0.4);
+            font-size: 1.5rem;
+            color: var(--neon-green);
+            text-shadow: 0 0 10px rgba(0, 255, 65, 0.4);
             min-width: 40px;
         }
+
         .arch-label {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 0.9rem; color: var(--neon-cyan);
-            text-transform: uppercase; letter-spacing: 1px;
+            font-size: 0.9rem;
+            color: var(--neon-cyan);
+            text-transform: uppercase;
+            letter-spacing: 1px;
             min-width: 180px;
         }
-        .arch-desc { font-size: 0.8rem; color: var(--text-secondary); }
+
+        .arch-desc {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
 
         /* ── Stats ── */
         .stats-row {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 1rem; margin: 2rem 0;
+            gap: 1rem;
+            margin: 2rem 0;
         }
+
         .stat-box {
             background: var(--bg-card);
             border: 1px solid var(--border-neon);
-            padding: 1.5rem; text-align: center;
+            padding: 1.5rem;
+            text-align: center;
         }
+
         .stat-num {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 2.5rem; font-weight: 400;
+            font-size: 2.5rem;
+            font-weight: 400;
             color: var(--neon-green);
-            text-shadow: 0 0 15px rgba(0,255,65,0.4);
+            text-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
         }
+
         .stat-label {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 0.6rem; text-transform: uppercase;
-            letter-spacing: 2px; color: var(--text-muted);
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-muted);
             margin-top: 0.3rem;
         }
 
         /* ── Code Blocks ── */
         .code-block {
-            background: rgba(0,255,65,0.03);
+            background: rgba(0, 255, 65, 0.03);
             border: 1px solid var(--border-neon);
             border-left: 3px solid var(--neon-green);
             padding: 1.5rem;
             margin: 1rem 0;
             overflow-x: auto;
         }
+
         .code-block code {
             font-family: 'Fira Code', monospace;
             font-size: 0.8rem;
             color: var(--neon-cyan);
         }
-        .code-block .comment { color: var(--text-muted); }
-        .code-block .keyword { color: var(--neon-green); }
+
+        .code-block .comment {
+            color: var(--text-muted);
+        }
+
+        .code-block .keyword {
+            color: var(--neon-green);
+        }
 
         /* ── Quickstart Steps ── */
-        .steps { margin-top: 2rem; }
-        .step {
-            display: flex; gap: 1.5rem;
-            margin-bottom: 2rem; align-items: flex-start;
+        .steps {
+            margin-top: 2rem;
         }
+
+        .step {
+            display: flex;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+            align-items: flex-start;
+        }
+
         .step-num {
             font-family: 'Share Tech Mono', monospace;
-            font-size: 1.5rem; color: var(--neon-green);
-            text-shadow: 0 0 10px rgba(0,255,65,0.4);
+            font-size: 1.5rem;
+            color: var(--neon-green);
+            text-shadow: 0 0 10px rgba(0, 255, 65, 0.4);
             border: 1px solid var(--border-neon);
-            width: 40px; height: 40px;
-            display: flex; align-items: center; justify-content: center;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             flex-shrink: 0;
         }
-        .step-content h3 { margin-bottom: 0.5rem; }
-        .step-content p { font-size: 0.8rem; color: var(--text-secondary); }
+
+        .step-content h3 {
+            margin-bottom: 0.5rem;
+        }
+
+        .step-content p {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
 
         /* ── Tabs Table ── */
         .tabs-table {
-            width: 100%; border-collapse: collapse;
+            width: 100%;
+            border-collapse: collapse;
             margin-top: 1.5rem;
         }
+
         .tabs-table th {
             font-family: 'Share Tech Mono', monospace;
-            text-transform: uppercase; letter-spacing: 1px;
-            font-size: 0.7rem; color: var(--neon-green);
-            text-align: left; padding: 0.8rem 1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.7rem;
+            color: var(--neon-green);
+            text-align: left;
+            padding: 0.8rem 1rem;
             border-bottom: 1px solid var(--border-neon);
-            background: rgba(0,255,65,0.05);
+            background: rgba(0, 255, 65, 0.05);
         }
+
         .tabs-table td {
             padding: 0.8rem 1rem;
-            border-bottom: 1px solid rgba(0,255,65,0.08);
-            font-size: 0.8rem; color: var(--text-secondary);
+            border-bottom: 1px solid rgba(0, 255, 65, 0.08);
+            font-size: 0.8rem;
+            color: var(--text-secondary);
         }
-        .tabs-table tr:hover td { background: rgba(0,255,65,0.03); }
-        .tab-name { color: var(--neon-cyan); font-weight: 500; }
+
+        .tabs-table tr:hover td {
+            background: rgba(0, 255, 65, 0.03);
+        }
+
+        .tab-name {
+            color: var(--neon-cyan);
+            font-weight: 500;
+        }
 
         /* ── Footer ── */
         footer {
             border-top: 1px solid var(--border-neon);
-            padding: 2rem; text-align: center;
-            font-size: 0.75rem; color: var(--text-muted);
+            padding: 2rem;
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
         }
-        footer a { color: var(--neon-green); text-decoration: none; }
+
+        footer a {
+            color: var(--neon-green);
+            text-decoration: none;
+        }
 
         /* ── Responsive ── */
         @media (max-width: 768px) {
-            .hero h1 { font-size: 2.5rem; }
-            .nav-links { display: none; }
-            .feature-grid { grid-template-columns: 1fr; }
-            .arch-layer { flex-direction: column; text-align: center; }
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .feature-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .arch-layer {
+                flex-direction: column;
+                text-align: center;
+            }
         }
     </style>
 </head>
+
 <body>
 
-<!-- Nav -->
-<nav>
-    <a href="#" class="nav-brand">🛡️ ThreatGraph</a>
-    <div class="nav-links">
-        <a href="#features">Features</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#quickstart">Quickstart</a>
-        <a href="#dashboard">Dashboard</a>
-        <a href="#api">API</a>
-        <a href="https://github.com/mariamhassan/langchain" target="_blank">GitHub</a>
-    </div>
-</nav>
+    <!-- Nav -->
+    <nav>
+        <a href="#" class="nav-brand">🛡️ ThreatGraph</a>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#quickstart">Quickstart</a>
+            <a href="#dashboard">Dashboard</a>
+            <a href="#api">API</a>
+            <a href="https://github.com/fcistud/langchain" target="_blank">GitHub</a>
+        </div>
+    </nav>
 
-<!-- Hero -->
-<section class="hero">
-    <div class="hero-shield">🛡️</div>
-    <h1>ThreatGraph</h1>
-    <p class="subtitle">AI-powered cybersecurity analyst — maps your attack surface using MITRE ATT&CK knowledge graphs, real-time CVE correlation, and agentic reasoning</p>
-    <div class="hero-badges">
-        <span class="hero-badge">🧠 LangGraph Agent</span>
-        <span class="hero-badge">📊 SurrealDB KG</span>
-        <span class="hero-badge">🔗 MITRE ATT&CK</span>
-        <span class="hero-badge">⚡ NVD / CISA KEV</span>
-        <span class="hero-badge">🛡️ Real-Time Analysis</span>
-    </div>
-    <div class="cta-group">
-        <a href="#quickstart" class="cta-primary">Get Started →</a>
-        <a href="https://github.com/mariamhassan/langchain" class="cta-secondary" target="_blank">View on GitHub</a>
-    </div>
-</section>
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-shield">🛡️</div>
+        <h1>ThreatGraph</h1>
+        <p class="subtitle">AI-powered cybersecurity analyst — maps your attack surface using MITRE ATT&CK knowledge
+            graphs, real-time CVE correlation, and agentic reasoning</p>
+        <div class="hero-badges">
+            <span class="hero-badge">🧠 LangGraph Agent</span>
+            <span class="hero-badge">📊 SurrealDB KG</span>
+            <span class="hero-badge">🔗 MITRE ATT&CK</span>
+            <span class="hero-badge">⚡ NVD / CISA KEV</span>
+            <span class="hero-badge">🛡️ Real-Time Analysis</span>
+        </div>
+        <div class="cta-group">
+            <a href="#quickstart" class="cta-primary">Get Started →</a>
+            <a href="https://github.com/mariamhassan/langchain" class="cta-secondary" target="_blank">View on GitHub</a>
+        </div>
+    </section>
 
-<!-- Stats -->
-<section>
-    <div class="stats-row">
-        <div class="stat-box"><div class="stat-num">1,854</div><div class="stat-label">Knowledge Graph Nodes</div></div>
-        <div class="stat-box"><div class="stat-num">20,377</div><div class="stat-label">Graph Edges</div></div>
-        <div class="stat-box"><div class="stat-num">691</div><div class="stat-label">ATT&CK Techniques</div></div>
-        <div class="stat-box"><div class="stat-num">172</div><div class="stat-label">Threat Groups</div></div>
-        <div class="stat-box"><div class="stat-num">116</div><div class="stat-label">CVEs Correlated</div></div>
-        <div class="stat-box"><div class="stat-num">52</div><div class="stat-label">Tests Passing</div></div>
-    </div>
-</section>
+    <!-- Stats -->
+    <section>
+        <div class="stats-row">
+            <div class="stat-box">
+                <div class="stat-num">1,854</div>
+                <div class="stat-label">Knowledge Graph Nodes</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-num">20,377</div>
+                <div class="stat-label">Graph Edges</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-num">691</div>
+                <div class="stat-label">ATT&CK Techniques</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-num">172</div>
+                <div class="stat-label">Threat Groups</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-num">116</div>
+                <div class="stat-label">CVEs Correlated</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-num">52</div>
+                <div class="stat-label">Tests Passing</div>
+            </div>
+        </div>
+    </section>
 
-<!-- Features -->
-<section id="features">
-    <div class="section-label">// capabilities</div>
-    <h2>Features</h2>
-    <div class="feature-grid">
-        <div class="feature-card">
-            <div class="feature-icon">🧠</div>
-            <h3>AI Security Analyst</h3>
-            <p>LangGraph multi-step agent classifies your question, queries the knowledge graph, synthesizes threat assessments, and generates remediation playbooks with Sigma detection rules.</p>
+    <!-- Features -->
+    <section id="features">
+        <div class="section-label">// capabilities</div>
+        <h2>Features</h2>
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🧠</div>
+                <h3>AI Security Analyst</h3>
+                <p>LangGraph multi-step agent classifies your question, queries the knowledge graph, synthesizes threat
+                    assessments, and generates remediation playbooks with Sigma detection rules.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔗</div>
+                <h3>Attack Path Discovery</h3>
+                <p>Maps complete attack chains: asset → software → CVE → technique → threat group. Identifies which
+                    hacker groups can reach your servers through known vulnerabilities.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <h3>Exposure Scoring</h3>
+                <p>Computes risk scores per asset using CVSS severity, asset criticality multipliers, and CISA KEV bonus
+                    for actively exploited vulnerabilities.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">⚔️</div>
+                <h3>MITRE ATT&CK Matrix</h3>
+                <p>Full kill chain visualization with 14 tactics, 691+ techniques, top threat groups, and most commonly
+                    used attack software — mapped to your infrastructure.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🛡️</div>
+                <h3>Coverage Gap Analysis</h3>
+                <p>Identifies unmitigated ATT&CK techniques by checking which techniques lack corresponding MITRE
+                    mitigations in your defense posture.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">💻</div>
+                <h3>Codebase Awareness</h3>
+                <p>Scans your codebase for dependencies (requirements.txt, package.json), maps them to software versions
+                    in the KG, and identifies vulnerable code paths.</p>
+            </div>
         </div>
-        <div class="feature-card">
-            <div class="feature-icon">🔗</div>
-            <h3>Attack Path Discovery</h3>
-            <p>Maps complete attack chains: asset → software → CVE → technique → threat group. Identifies which hacker groups can reach your servers through known vulnerabilities.</p>
-        </div>
-        <div class="feature-card">
-            <div class="feature-icon">📊</div>
-            <h3>Exposure Scoring</h3>
-            <p>Computes risk scores per asset using CVSS severity, asset criticality multipliers, and CISA KEV bonus for actively exploited vulnerabilities.</p>
-        </div>
-        <div class="feature-card">
-            <div class="feature-icon">⚔️</div>
-            <h3>MITRE ATT&CK Matrix</h3>
-            <p>Full kill chain visualization with 14 tactics, 691+ techniques, top threat groups, and most commonly used attack software — mapped to your infrastructure.</p>
-        </div>
-        <div class="feature-card">
-            <div class="feature-icon">🛡️</div>
-            <h3>Coverage Gap Analysis</h3>
-            <p>Identifies unmitigated ATT&CK techniques by checking which techniques lack corresponding MITRE mitigations in your defense posture.</p>
-        </div>
-        <div class="feature-card">
-            <div class="feature-icon">💻</div>
-            <h3>Codebase Awareness</h3>
-            <p>Scans your codebase for dependencies (requirements.txt, package.json), maps them to software versions in the KG, and identifies vulnerable code paths.</p>
-        </div>
-    </div>
-</section>
+    </section>
 
-<!-- Architecture -->
-<section id="architecture">
-    <div class="section-label">// system design</div>
-    <h2>3-Layer Knowledge Graph</h2>
-    <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">ThreatGraph connects threat intelligence to your actual infrastructure through a multi-layer SurrealDB knowledge graph.</p>
+    <!-- Architecture -->
+    <section id="architecture">
+        <div class="section-label">// system design</div>
+        <h2>3-Layer Knowledge Graph</h2>
+        <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">ThreatGraph connects threat
+            intelligence to your actual infrastructure through a multi-layer SurrealDB knowledge graph.</p>
 
-    <div class="arch-layers">
-        <div class="arch-layer">
-            <div class="arch-num">L1</div>
-            <div class="arch-label">Threat Intel</div>
-            <div class="arch-desc">691 techniques, 14 tactics, 172 threat groups, 680+ malware/tools, 43 mitigations — from MITRE ATT&CK STIX 2.1</div>
+        <div class="arch-layers">
+            <div class="arch-layer">
+                <div class="arch-num">L1</div>
+                <div class="arch-label">Threat Intel</div>
+                <div class="arch-desc">691 techniques, 14 tactics, 172 threat groups, 680+ malware/tools, 43 mitigations
+                    — from MITRE ATT&CK STIX 2.1</div>
+            </div>
+            <div class="arch-layer">
+                <div class="arch-num">L2</div>
+                <div class="arch-label">Asset Inventory</div>
+                <div class="arch-desc">Your servers, their software versions, CPE identifiers → NVD API → CVEs with CVSS
+                    scores + CISA KEV active exploitation flags</div>
+            </div>
+            <div class="arch-layer">
+                <div class="arch-num">L3</div>
+                <div class="arch-label">Code Awareness</div>
+                <div class="arch-desc">Codebase files, imports, dependencies → cross-referenced with software versions
+                    to identify vulnerable code paths</div>
+            </div>
         </div>
-        <div class="arch-layer">
-            <div class="arch-num">L2</div>
-            <div class="arch-label">Asset Inventory</div>
-            <div class="arch-desc">Your servers, their software versions, CPE identifiers → NVD API → CVEs with CVSS scores + CISA KEV active exploitation flags</div>
-        </div>
-        <div class="arch-layer">
-            <div class="arch-num">L3</div>
-            <div class="arch-label">Code Awareness</div>
-            <div class="arch-desc">Codebase files, imports, dependencies → cross-referenced with software versions to identify vulnerable code paths</div>
-        </div>
-    </div>
 
-    <div style="margin-top:2rem;">
-        <h3>Graph Traversal Example</h3>
-        <div class="code-block">
-            <code>
+        <div style="margin-top:2rem;">
+            <h3>Graph Traversal Example</h3>
+            <div class="code-block">
+                <code>
 <span class="comment">-- Find every CVE affecting your web server</span><br>
 <span class="keyword">SELECT</span> hostname,<br>
 &nbsp;&nbsp;-&gt;runs-&gt;software_version.name <span class="keyword">AS</span> software,<br>
@@ -450,156 +677,208 @@
 &nbsp;&nbsp;-&gt;runs-&gt;software_version-&gt;has_cve-&gt;cve.cvss_score <span class="keyword">AS</span> scores<br>
 <span class="keyword">FROM</span> asset <span class="keyword">WHERE</span> hostname = <span style="color:#FFB800">'web-server-01'</span>;
             </code>
+            </div>
         </div>
-    </div>
-</section>
+    </section>
 
-<!-- Quickstart -->
-<section id="quickstart">
-    <div class="section-label">// getting started</div>
-    <h2>Quickstart</h2>
-    <div class="steps">
-        <div class="step">
-            <div class="step-num">1</div>
-            <div class="step-content">
-                <h3>Install SurrealDB</h3>
-                <div class="code-block"><code>curl -sSf https://install.surrealdb.com | sh</code></div>
+    <!-- Quickstart -->
+    <section id="quickstart">
+        <div class="section-label">// getting started</div>
+        <h2>Quickstart</h2>
+        <div class="steps">
+            <div class="step">
+                <div class="step-num">1</div>
+                <div class="step-content">
+                    <h3>Install SurrealDB</h3>
+                    <div class="code-block"><code>curl -sSf https://install.surrealdb.com | sh</code></div>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-num">2</div>
+                <div class="step-content">
+                    <h3>Start the Database</h3>
+                    <div class="code-block">
+                        <code>surreal start --user root --pass root --bind 0.0.0.0:8000 memory</code></div>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-num">3</div>
+                <div class="step-content">
+                    <h3>Clone & Install</h3>
+                    <div class="code-block">
+                        <code>git clone https://github.com/mariamhassan/langchain.git<br>cd langchain<br>pip install -r requirements.txt</code>
+                    </div>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-num">4</div>
+                <div class="step-content">
+                    <h3>Configure API Keys</h3>
+                    <div class="code-block">
+                        <code><span class="comment"># Edit .env with your keys</span><br>ANTHROPIC_API_KEY=sk-ant-...<br>NVD_API_KEY=your-nvd-key<br>LANGSMITH_API_KEY=lsv2_pt_...</code>
+                    </div>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-num">5</div>
+                <div class="step-content">
+                    <h3>Load Knowledge Graph</h3>
+                    <div class="code-block">
+                        <code>python3 ingest.py <span class="comment"># ~60s — loads 1,854 nodes + 20,377 edges</span></code>
+                    </div>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-num">6</div>
+                <div class="step-content">
+                    <h3>Launch Dashboard</h3>
+                    <div class="code-block">
+                        <code>streamlit run app.py <span class="comment"># → http://localhost:8501</span></code></div>
+                </div>
             </div>
         </div>
-        <div class="step">
-            <div class="step-num">2</div>
-            <div class="step-content">
-                <h3>Start the Database</h3>
-                <div class="code-block"><code>surreal start --user root --pass root --bind 0.0.0.0:8000 memory</code></div>
-            </div>
-        </div>
-        <div class="step">
-            <div class="step-num">3</div>
-            <div class="step-content">
-                <h3>Clone & Install</h3>
-                <div class="code-block"><code>git clone https://github.com/mariamhassan/langchain.git<br>cd langchain<br>pip install -r requirements.txt</code></div>
-            </div>
-        </div>
-        <div class="step">
-            <div class="step-num">4</div>
-            <div class="step-content">
-                <h3>Configure API Keys</h3>
-                <div class="code-block"><code><span class="comment"># Edit .env with your keys</span><br>ANTHROPIC_API_KEY=sk-ant-...<br>NVD_API_KEY=your-nvd-key<br>LANGSMITH_API_KEY=lsv2_pt_...</code></div>
-            </div>
-        </div>
-        <div class="step">
-            <div class="step-num">5</div>
-            <div class="step-content">
-                <h3>Load Knowledge Graph</h3>
-                <div class="code-block"><code>python3 ingest.py <span class="comment"># ~60s — loads 1,854 nodes + 20,377 edges</span></code></div>
-            </div>
-        </div>
-        <div class="step">
-            <div class="step-num">6</div>
-            <div class="step-content">
-                <h3>Launch Dashboard</h3>
-                <div class="code-block"><code>streamlit run app.py <span class="comment"># → http://localhost:8501</span></code></div>
-            </div>
-        </div>
-    </div>
-</section>
+    </section>
 
-<!-- Dashboard Tabs -->
-<section id="dashboard">
-    <div class="section-label">// dashboard</div>
-    <h2>8 Analysis Modules</h2>
-    <table class="tabs-table">
-        <thead>
-            <tr><th>Tab</th><th>Module</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-            <tr><td class="tab-name">🔍 Analyst</td><td>AI Security Analyst</td><td>Natural language queries → classified → KG traversal → Claude synthesis → remediation playbook</td></tr>
-            <tr><td class="tab-name">📊 Exposure</td><td>Exposure Dashboard</td><td>Risk scores per asset with CVSS severity bars, KEV indicators, and total org score</td></tr>
-            <tr><td class="tab-name">🔗 Attack Graph</td><td>Interactive Visualization</td><td>pyvis/NetworkX graph: 161 nodes, 156 edges with legend, stats overlay, CVSS-scaled nodes</td></tr>
-            <tr><td class="tab-name">🖥️ Asset Intel</td><td>Asset Deep Dive</td><td>Per-asset profiles with software inventory, CVE tables, CVSS distribution charts</td></tr>
-            <tr><td class="tab-name">⚔️ ATT&CK Matrix</td><td>Kill Chain Heatmap</td><td>14 tactic cards, top threat groups (Kimsuky: 109 techniques), attack software rankings</td></tr>
-            <tr><td class="tab-name">🛡️ Gaps</td><td>Coverage Analysis</td><td>Unmitigated ATT&CK techniques identified via reverse mitigation traversal</td></tr>
-            <tr><td class="tab-name">💻 Code</td><td>Codebase Scanner</td><td>Dependency analysis → cross-reference with KG software → vulnerability mapping</td></tr>
-            <tr><td class="tab-name">📚 Guide</td><td>Tutorial & Glossary</td><td>Architecture overview, step-by-step tutorial, cybersecurity glossary for beginners</td></tr>
-        </tbody>
-    </table>
-</section>
+    <!-- Dashboard Tabs -->
+    <section id="dashboard">
+        <div class="section-label">// dashboard</div>
+        <h2>8 Analysis Modules</h2>
+        <table class="tabs-table">
+            <thead>
+                <tr>
+                    <th>Tab</th>
+                    <th>Module</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="tab-name">🔍 Analyst</td>
+                    <td>AI Security Analyst</td>
+                    <td>Natural language queries → classified → KG traversal → Claude synthesis → remediation playbook
+                    </td>
+                </tr>
+                <tr>
+                    <td class="tab-name">📊 Exposure</td>
+                    <td>Exposure Dashboard</td>
+                    <td>Risk scores per asset with CVSS severity bars, KEV indicators, and total org score</td>
+                </tr>
+                <tr>
+                    <td class="tab-name">🔗 Attack Graph</td>
+                    <td>Interactive Visualization</td>
+                    <td>pyvis/NetworkX graph: 161 nodes, 156 edges with legend, stats overlay, CVSS-scaled nodes</td>
+                </tr>
+                <tr>
+                    <td class="tab-name">🖥️ Asset Intel</td>
+                    <td>Asset Deep Dive</td>
+                    <td>Per-asset profiles with software inventory, CVE tables, CVSS distribution charts</td>
+                </tr>
+                <tr>
+                    <td class="tab-name">⚔️ ATT&CK Matrix</td>
+                    <td>Kill Chain Heatmap</td>
+                    <td>14 tactic cards, top threat groups (Kimsuky: 109 techniques), attack software rankings</td>
+                </tr>
+                <tr>
+                    <td class="tab-name">🛡️ Gaps</td>
+                    <td>Coverage Analysis</td>
+                    <td>Unmitigated ATT&CK techniques identified via reverse mitigation traversal</td>
+                </tr>
+                <tr>
+                    <td class="tab-name">💻 Code</td>
+                    <td>Codebase Scanner</td>
+                    <td>Dependency analysis → cross-reference with KG software → vulnerability mapping</td>
+                </tr>
+                <tr>
+                    <td class="tab-name">📚 Guide</td>
+                    <td>Tutorial & Glossary</td>
+                    <td>Architecture overview, step-by-step tutorial, cybersecurity glossary for beginners</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
 
-<!-- API -->
-<section id="api">
-    <div class="section-label">// api reference</div>
-    <h2>Core Functions</h2>
-    <div class="feature-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
-        <div class="feature-card">
-            <h3>get_attack_paths()</h3>
-            <p>Traverses asset→runs→software_version→has_cve→cve to discover complete attack chains. Filter by hostname.</p>
+    <!-- API -->
+    <section id="api">
+        <div class="section-label">// api reference</div>
+        <h2>Core Functions</h2>
+        <div class="feature-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+            <div class="feature-card">
+                <h3>get_attack_paths()</h3>
+                <p>Traverses asset→runs→software_version→has_cve→cve to discover complete attack chains. Filter by
+                    hostname.</p>
+            </div>
+            <div class="feature-card">
+                <h3>compute_exposure_score()</h3>
+                <p>Calculates risk: (ΣCVSS × criticality_mult) + (KEV_count × 20). Returns sorted assets with scores.
+                </p>
+            </div>
+            <div class="feature-card">
+                <h3>get_coverage_gaps()</h3>
+                <p>Finds unmitigated techniques via ←mitigates←mitigation reverse traversal. Returns top 50 gaps.</p>
+            </div>
+            <div class="feature-card">
+                <h3>search_kg()</h3>
+                <p>Fuzzy semantic search with keyword expansion. Queries like "privilege escalation" expand to related
+                    terms across all tables.</p>
+            </div>
+            <div class="feature-card">
+                <h3>get_cve_blast_radius()</h3>
+                <p>For a given CVE, finds all affected software versions, all assets running that software, and their
+                    criticality.</p>
+            </div>
+            <div class="feature-card">
+                <h3>run_query()</h3>
+                <p>Full agent pipeline: classify → query KG → synthesize with Claude → generate playbook with Sigma
+                    rules.</p>
+            </div>
         </div>
-        <div class="feature-card">
-            <h3>compute_exposure_score()</h3>
-            <p>Calculates risk: (ΣCVSS × criticality_mult) + (KEV_count × 20). Returns sorted assets with scores.</p>
-        </div>
-        <div class="feature-card">
-            <h3>get_coverage_gaps()</h3>
-            <p>Finds unmitigated techniques via ←mitigates←mitigation reverse traversal. Returns top 50 gaps.</p>
-        </div>
-        <div class="feature-card">
-            <h3>search_kg()</h3>
-            <p>Fuzzy semantic search with keyword expansion. Queries like "privilege escalation" expand to related terms across all tables.</p>
-        </div>
-        <div class="feature-card">
-            <h3>get_cve_blast_radius()</h3>
-            <p>For a given CVE, finds all affected software versions, all assets running that software, and their criticality.</p>
-        </div>
-        <div class="feature-card">
-            <h3>run_query()</h3>
-            <p>Full agent pipeline: classify → query KG → synthesize with Claude → generate playbook with Sigma rules.</p>
-        </div>
-    </div>
-</section>
+    </section>
 
-<!-- Tech Stack -->
-<section>
-    <div class="section-label">// technology</div>
-    <h2>Tech Stack</h2>
-    <div class="stats-row" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-        <div class="stat-box" style="text-align:left;padding:1.2rem;">
-            <div style="font-size:1.5rem;margin-bottom:0.5rem;">📊</div>
-            <h3 style="font-size:0.8rem;">SurrealDB</h3>
-            <p style="font-size:0.7rem;color:var(--text-muted);">Multi-model database for graph + document storage</p>
+    <!-- Tech Stack -->
+    <section>
+        <div class="section-label">// technology</div>
+        <h2>Tech Stack</h2>
+        <div class="stats-row" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+            <div class="stat-box" style="text-align:left;padding:1.2rem;">
+                <div style="font-size:1.5rem;margin-bottom:0.5rem;">📊</div>
+                <h3 style="font-size:0.8rem;">SurrealDB</h3>
+                <p style="font-size:0.7rem;color:var(--text-muted);">Multi-model database for graph + document storage
+                </p>
+            </div>
+            <div class="stat-box" style="text-align:left;padding:1.2rem;">
+                <div style="font-size:1.5rem;margin-bottom:0.5rem;">🧠</div>
+                <h3 style="font-size:0.8rem;">LangGraph</h3>
+                <p style="font-size:0.7rem;color:var(--text-muted);">Stateful multi-step agent orchestration</p>
+            </div>
+            <div class="stat-box" style="text-align:left;padding:1.2rem;">
+                <div style="font-size:1.5rem;margin-bottom:0.5rem;">🤖</div>
+                <h3 style="font-size:0.8rem;">Claude / GPT-4o</h3>
+                <p style="font-size:0.7rem;color:var(--text-muted);">LLM synthesis and playbook generation</p>
+            </div>
+            <div class="stat-box" style="text-align:left;padding:1.2rem;">
+                <div style="font-size:1.5rem;margin-bottom:0.5rem;">🎨</div>
+                <h3 style="font-size:0.8rem;">Streamlit</h3>
+                <p style="font-size:0.7rem;color:var(--text-muted);">Dashboard with neon-on-dark cyberpunk HUD</p>
+            </div>
+            <div class="stat-box" style="text-align:left;padding:1.2rem;">
+                <div style="font-size:1.5rem;margin-bottom:0.5rem;">🔗</div>
+                <h3 style="font-size:0.8rem;">pyvis / NetworkX</h3>
+                <p style="font-size:0.7rem;color:var(--text-muted);">Interactive attack graph visualization</p>
+            </div>
+            <div class="stat-box" style="text-align:left;padding:1.2rem;">
+                <div style="font-size:1.5rem;margin-bottom:0.5rem;">📡</div>
+                <h3 style="font-size:0.8rem;">NVD + CISA KEV</h3>
+                <p style="font-size:0.7rem;color:var(--text-muted);">Real-time vulnerability and exploitation data</p>
+            </div>
         </div>
-        <div class="stat-box" style="text-align:left;padding:1.2rem;">
-            <div style="font-size:1.5rem;margin-bottom:0.5rem;">🧠</div>
-            <h3 style="font-size:0.8rem;">LangGraph</h3>
-            <p style="font-size:0.7rem;color:var(--text-muted);">Stateful multi-step agent orchestration</p>
-        </div>
-        <div class="stat-box" style="text-align:left;padding:1.2rem;">
-            <div style="font-size:1.5rem;margin-bottom:0.5rem;">🤖</div>
-            <h3 style="font-size:0.8rem;">Claude / GPT-4o</h3>
-            <p style="font-size:0.7rem;color:var(--text-muted);">LLM synthesis and playbook generation</p>
-        </div>
-        <div class="stat-box" style="text-align:left;padding:1.2rem;">
-            <div style="font-size:1.5rem;margin-bottom:0.5rem;">🎨</div>
-            <h3 style="font-size:0.8rem;">Streamlit</h3>
-            <p style="font-size:0.7rem;color:var(--text-muted);">Dashboard with neon-on-dark cyberpunk HUD</p>
-        </div>
-        <div class="stat-box" style="text-align:left;padding:1.2rem;">
-            <div style="font-size:1.5rem;margin-bottom:0.5rem;">🔗</div>
-            <h3 style="font-size:0.8rem;">pyvis / NetworkX</h3>
-            <p style="font-size:0.7rem;color:var(--text-muted);">Interactive attack graph visualization</p>
-        </div>
-        <div class="stat-box" style="text-align:left;padding:1.2rem;">
-            <div style="font-size:1.5rem;margin-bottom:0.5rem;">📡</div>
-            <h3 style="font-size:0.8rem;">NVD + CISA KEV</h3>
-            <p style="font-size:0.7rem;color:var(--text-muted);">Real-time vulnerability and exploitation data</p>
-        </div>
-    </div>
-</section>
+    </section>
 
-<!-- Footer -->
-<footer>
-    <p>ThreatGraph — Built for the <a href="#">SurrealDB + LangChain Hackathon 2026</a></p>
-    <p style="margin-top:0.5rem;">MIT License · <a href="https://github.com/mariamhassan/langchain">GitHub</a></p>
-</footer>
+    <!-- Footer -->
+    <footer>
+        <p>ThreatGraph — Built for the <a href="#">SurrealDB + LangChain Hackathon 2026</a></p>
+        <p style="margin-top:0.5rem;">MIT License · <a href="https://github.com/mariamhassan/langchain">GitHub</a></p>
+    </footer>
 
 </body>
+
 </html>
