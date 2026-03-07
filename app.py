@@ -656,6 +656,38 @@ with st.sidebar:
     st.caption(f"LangSmith tracing: {trace_label}")
     st.caption(f"Project: {trace_status.get('project')}")
 
+    try:
+        history_db = get_db()
+        history_rows = surreal_query(
+            history_db,
+            """
+            SELECT started_at, queries, findings
+            FROM investigation
+            WHERE session_id = $thread_id
+            ORDER BY started_at DESC
+            LIMIT 3;
+            """,
+            {"thread_id": st.session_state.get("thread_id")},
+        )
+        if history_rows:
+            st.markdown("#### Recent Investigation History")
+            for row in history_rows:
+                query_text = ""
+                if isinstance(row.get("queries"), list) and row.get("queries"):
+                    query_text = row["queries"][0]
+                finding_text = ""
+                if isinstance(row.get("findings"), list) and row.get("findings"):
+                    try:
+                        finding = json.loads(row["findings"][0])
+                        finding_text = finding.get("recommended_focus") or finding.get("top_asset") or ""
+                    except Exception:
+                        finding_text = ""
+                st.caption(f"{row.get('started_at', '')} · {query_text or 'query'}")
+                if finding_text:
+                    st.caption(f"focus: {finding_text}")
+    except Exception:
+        pass
+
     st.markdown("---")
     st.markdown("## 🎯 Quick Queries")
     st.markdown('<div class="info-callout">Click any query below to auto-fill the analyst. These showcase different capabilities.</div>', unsafe_allow_html=True)
@@ -781,6 +813,35 @@ with tab1:
                         <strong>Threat Vectors:</strong> {len(evidence_bundle.get("threat_vectors", []))}
                     </div>
                     """, unsafe_allow_html=True)
+
+                    if result.get("ranked_assets"):
+                        ranked_rows = []
+                        for asset in result["ranked_assets"][:10]:
+                            ranked_rows.append({
+                                "Asset": asset.get("asset_hostname") or asset.get("hostname"),
+                                "Zone": asset.get("network_zone"),
+                                "Criticality": asset.get("criticality"),
+                                "Exposure Score": asset.get("exposure_score"),
+                            })
+                        st.dataframe(pd.DataFrame(ranked_rows), use_container_width=True, hide_index=True)
+
+                    cve_rows = evidence_bundle.get("cves", [])
+                    if cve_rows:
+                        table_rows = []
+                        for row in cve_rows[:20]:
+                            table_rows.append({
+                                "CVE ID": row.get("cve_id"),
+                                "CVSS": row.get("cvss_score"),
+                                "KEV": "YES" if row.get("is_kev") else "No",
+                                "Description": str(row.get("description", ""))[:120],
+                            })
+                        st.markdown("**Top CVE Evidence**")
+                        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+                    evidence_paths = evidence_bundle.get("evidence_paths", [])
+                    if evidence_paths:
+                        st.markdown("**Evidence Paths**")
+                        st.dataframe(pd.DataFrame(evidence_paths[:20]), use_container_width=True, hide_index=True)
 
                 # Playbook
                 st.markdown("""<div class="section-header"><div class="section-icon" style="background:rgba(52,211,153,0.15);">🔧</div>
