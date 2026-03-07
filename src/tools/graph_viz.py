@@ -832,6 +832,16 @@ def generate_attack_path_viz(hostname=None, include_groups=False, show_controls=
     return render_graph_html(G, paths=paths)
 
 
+def get_attack_path_details(hostname=None, include_groups=False, show_controls=True, show_threats=True) -> list[dict]:
+    """Return structured attack-path metadata for the current graph view."""
+    db = get_db()
+    bundles = get_attack_paths(db, hostname) if hostname else get_attack_paths(db)
+    G = build_enterprise_graph(db, hostname, show_controls, show_threats, bundles=bundles)
+    if include_groups:
+        G = add_threat_layer(G, bundles)
+    return find_attack_paths(G)
+
+
 if __name__ == "__main__":
     html = generate_attack_path_viz(include_groups=True)
     outpath = os.path.join(os.path.dirname(__file__), "..", "..", "attack_graph.html")

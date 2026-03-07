@@ -1004,33 +1004,29 @@ with tab3:
     # Attack path data
     with st.expander("📋 Detailed Attack Path Data"):
         try:
-            db = get_db()
-            paths = get_attack_paths(db)
+            from src.tools.graph_viz import get_attack_path_details
+
+            hostname_filter = None if filter_host == "All Assets" else filter_host
+            paths = get_attack_path_details(
+                hostname=hostname_filter,
+                include_groups=include_groups,
+                show_controls=show_controls,
+                show_threats=show_threats,
+            )
             if paths:
-                for p in paths:
-                    h = p.get("hostname", "?")
-                    c = p.get("criticality", "?")
-                    crown = "👑 " if p.get("is_crown_jewel") else ""
-                    st.markdown(f"**{crown}🖥️ {h}** ({c.upper()})")
-                    sw = [f"{row.get('name', '')} {row.get('version', '')}".strip() for row in p.get("software_versions", [])]
-                    attack_sw = [row.get("name", "") for row in p.get("attack_software", []) if row.get("name")]
-                    cves = [row.get("cve_id", "") for row in p.get("cves", []) if row.get("cve_id")]
-                    controls = [row.get("name", "") for row in p.get("controls", []) if row.get("name")]
-                    threats = [row.get("name", "") for row in p.get("threat_vectors", []) if row.get("name")]
-                    connected = p.get("connected_assets", [])
-                    if sw:
-                        st.markdown(f"Software Versions: `{sw}`")
-                    if attack_sw:
-                        st.markdown(f"ATT&CK Software: `{attack_sw}`")
-                    if cves:
-                        st.markdown(f"CVEs: `{cves}`")
-                    if controls:
-                        st.markdown(f"Controls: `{controls}`")
-                    if threats:
-                        st.markdown(f"Threat Vectors: `{threats}`")
-                    if connected:
-                        st.markdown(f"Connected Assets: `{connected}`")
+                for idx, path in enumerate(paths[:10], start=1):
+                    node_labels = []
+                    for node in path.get("nodes", []):
+                        node_labels.append(node.replace("asset:", "").replace("_", "-"))
+                    st.markdown(f"**Path {idx}** · risk `{path.get('risk')}`")
+                    st.markdown(f"Route: `{' -> '.join(node_labels)}`")
+                    if path.get("top_cves"):
+                        st.markdown(f"CVEs: `{path['top_cves']}`")
+                    if path.get("top_groups"):
+                        st.markdown(f"Threat Groups: `{path['top_groups']}`")
                     st.markdown("---")
+            else:
+                st.info("No attack paths found for the current graph view.")
         except Exception as e:
             st.warning(f"Error: {e}")
 
