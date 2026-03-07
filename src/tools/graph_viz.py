@@ -1,12 +1,11 @@
-"""Attack path graph visualization using NetworkX + pyvis.
+"""Attack path graph visualization — MATRIX EDITION.
 
-Generates rich, interactive HTML graphs showing:
-- Asset → Software → CVE full chains
-- CVE severity color-coding (CVSS gradient)
-- KEV actively-exploited markers
-- Threat Group → Technique attribution
-- Tactic-level grouping
-- Built-in legend and statistics
+Generates a deeply immersive, Matrix-inspired interactive HTML graph:
+- Raining green code particles on black background
+- Neon green/cyan/red node coloring with glow effects
+- Animated pulse edges showing attack flow direction
+- HUD-style overlays with scanline effects
+- Internet-facing exposure indicators (🌐 vs 🔒)
 """
 
 import json
@@ -22,23 +21,25 @@ from src.database import get_db
 from src.tools.surreal_tools import surreal_query
 
 
-# ─── THEME ────────────────────────────────────────────
+# ─── MATRIX THEME ─────────────────────────────────────
 
 COLORS = {
-    "asset_critical": "#ef4444",
-    "asset_high": "#f97316",
-    "asset_medium": "#eab308",
-    "asset_low": "#22c55e",
-    "software": "#818cf8",
-    "cve_critical": "#ff3333",
-    "cve_high": "#ff8833",
-    "cve_medium": "#ddaa00",
-    "cve_low": "#22c55e",
-    "cve_kev": "#ff0055",
-    "technique": "#38bdf8",
-    "tactic": "#06b6d4",
-    "threat_group": "#c084fc",
-    "mitigation": "#4ade80",
+    "asset_critical": "#FF3333",
+    "asset_high": "#FF6B00",
+    "asset_medium": "#FFB800",
+    "asset_low": "#00FF41",
+    "software": "#00FFFF",
+    "cve_critical": "#FF3333",
+    "cve_high": "#FF6B00",
+    "cve_medium": "#FFB800",
+    "cve_low": "#00FF41",
+    "cve_kev": "#FF0055",
+    "technique": "#0080FF",
+    "tactic": "#00FFFF",
+    "threat_group": "#FF00FF",
+    "mitigation": "#00FF41",
+    "internet_facing": "#FF3333",
+    "internal": "#00FF41",
 }
 
 SHAPES = {
@@ -49,6 +50,8 @@ SHAPES = {
     "threat_group": "star",
     "tactic": "square",
 }
+
+FONT = {"color": "#00FF41", "face": "Share Tech Mono, Fira Code, monospace"}
 
 
 def _cve_color(cvss, is_kev=False):
@@ -66,10 +69,10 @@ def _cve_color(cvss, is_kev=False):
 
 
 def _cve_size(cvss):
-    base = 12
+    base = 15
     if cvss is None:
         return base + 5
-    return base + cvss * 2.5
+    return base + cvss * 3
 
 
 def _asset_color(crit):
@@ -92,10 +95,9 @@ def _flatten(val):
 # ─── GRAPH BUILDERS ───────────────────────────────────
 
 def build_attack_graph(db, hostname=None) -> nx.DiGraph:
-    """Build the asset → software → CVE attack path graph using graph traversal."""
+    """Build the asset → software → CVE attack path graph."""
     G = nx.DiGraph()
 
-    # Query all assets with full traversal chain
     if hostname:
         query = """
             SELECT hostname, criticality, os, network_zone, ip_address, owner,
@@ -141,31 +143,45 @@ def build_attack_graph(db, hostname=None) -> nx.DiGraph:
         kev_count = sum(1 for k in kev_flags if k)
         max_cvss = max((s for s in cvss_scores if isinstance(s, (int, float))), default=0)
 
+        # Determine internet exposure based on network zone
+        is_internet_facing = zone.lower() in ("dmz", "public", "external", "internet")
+        exposure_icon = "🌐 INTERNET-FACING" if is_internet_facing else "🔒 INTERNAL"
+        exposure_color = COLORS["internet_facing"] if is_internet_facing else COLORS["internal"]
+
         # Asset node
         asset_node = f"asset:{h}"
+        node_color = _asset_color(crit)
         G.add_node(asset_node,
-            label=f"🖥️ {h}",
+            label=f"{'🌐' if is_internet_facing else '🔒'} {h}",
             group="asset",
             shape=SHAPES["asset"],
-            color=_asset_color(crit),
-            size=40,
-            font={"color": "white", "size": 14, "face": "Inter, sans-serif", "bold": True},
-            title=f"""<div style='font-family:sans-serif;max-width:300px;'>
-                <h3 style='color:#38bdf8;margin:0'>{h}</h3>
-                <hr style='border-color:#334155'/>
-                <b>OS:</b> {os_name}<br/>
-                <b>IP:</b> {ip}<br/>
-                <b>Zone:</b> {zone}<br/>
-                <b>Criticality:</b> <span style='color:{_asset_color(crit)}'>{crit.upper()}</span><br/>
-                <b>Owner:</b> {a.get('owner', 'N/A')}<br/>
-                <hr style='border-color:#334155'/>
-                <b>Software:</b> {len(sw_names)}<br/>
-                <b>CVEs:</b> {total_cves}<br/>
-                <b>KEV (actively exploited):</b> <span style='color:#ef4444'>{kev_count}</span><br/>
-                <b>Max CVSS:</b> <span style='color:{"#ef4444" if max_cvss >= 9 else "#f97316" if max_cvss >= 7 else "#eab308"}'>{max_cvss}</span>
+            color={"background": node_color, "border": node_color,
+                   "highlight": {"background": "#FFFFFF", "border": node_color}},
+            size=45,
+            font={**FONT, "size": 14, "bold": True, "color": "#FFFFFF"},
+            title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:320px;background:#0A0A0F;border:1px solid {node_color};padding:12px;'>
+                <div style='color:{node_color};font-size:16px;text-shadow:0 0 10px {node_color};letter-spacing:2px;'>{h}</div>
+                <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,{node_color},transparent);'></div>
+                <div style='color:#00FF41;font-size:11px;'>
+                    <span style='color:{exposure_color};text-shadow:0 0 5px {exposure_color};'>{exposure_icon}</span><br/>
+                    OS: <span style='color:#00FFFF;'>{os_name}</span><br/>
+                    IP: <span style='color:#00FFFF;'>{ip}</span><br/>
+                    ZONE: <span style='color:#00FFFF;'>{zone}</span><br/>
+                    CRITICALITY: <span style='color:{node_color};text-shadow:0 0 5px {node_color};'>{crit.upper()}</span><br/>
+                    OWNER: <span style='color:#7FB87F;'>{a.get('owner', 'N/A')}</span>
+                </div>
+                <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,rgba(0,255,65,0.3),transparent);'></div>
+                <div style='color:#FFB800;font-size:11px;'>
+                    SOFTWARE: {len(sw_names)} | CVEs: <span style='color:#FF3333;'>{total_cves}</span> | 
+                    KEV: <span style='color:#FF0055;text-shadow:0 0 8px #FF0055;'>{kev_count}</span><br/>
+                    MAX CVSS: <span style='color:{"#FF3333" if max_cvss >= 9 else "#FF6B00" if max_cvss >= 7 else "#FFB800"};
+                        text-shadow:0 0 8px {"#FF3333" if max_cvss >= 9 else "#FF6B00"};font-size:14px;'>{max_cvss}</span>
+                </div>
             </div>""",
-            borderWidth=3,
-            borderWidthSelected=5,
+            borderWidth=4 if is_internet_facing else 2,
+            borderWidthSelected=6,
+            shadow={"enabled": True, "color": node_color, "size": 15 if is_internet_facing else 8},
+            is_internet_facing=is_internet_facing,
         )
 
         # Software nodes + edges
@@ -176,24 +192,24 @@ def build_attack_graph(db, hostname=None) -> nx.DiGraph:
                     label=f"📦 {sw_name}\nv{sw_ver}",
                     group="software",
                     shape=SHAPES["software"],
-                    color=COLORS["software"],
+                    color={"background": COLORS["software"], "border": COLORS["software"]},
                     size=22,
-                    font={"color": "white", "size": 11, "face": "Inter, sans-serif"},
-                    title=f"""<div style='font-family:sans-serif;'>
-                        <h3 style='color:#818cf8;margin:0'>📦 {sw_name}</h3>
-                        <b>Version:</b> {sw_ver}
+                    font={**FONT, "size": 10, "color": "#00FFFF"},
+                    title=f"""<div style='font-family:Share Tech Mono,monospace;background:#0A0A0F;
+                        border:1px solid #00FFFF;padding:10px;'>
+                        <div style='color:#00FFFF;text-shadow:0 0 10px #00FFFF;'>📦 {sw_name}</div>
+                        <div style='color:#7FB87F;font-size:11px;'>VERSION: {sw_ver}</div>
                     </div>""",
+                    shadow={"enabled": True, "color": "#00FFFF", "size": 5},
                 )
             G.add_edge(asset_node, sw_node,
-                color={"color": "#475569", "opacity": 0.7},
-                width=2, arrows="to", title="runs",
+                color={"color": "rgba(0,255,65,0.4)", "highlight": "#00FF41"},
+                width=2, arrows="to", title="RUNS",
                 smooth={"type": "curvedCW", "roundness": 0.1})
 
-        # CVE nodes + figure out which SW they belong to
-        # We need per-software CVE mapping; query each software individually
+        # CVE nodes
         for sw_name, sw_ver in zip(sw_names, sw_versions):
             sw_node = f"sw:{sw_name}:{sw_ver}"
-            # Get CVEs for this specific software
             safe_sw = f"{sw_name}_{sw_ver}".replace(" ", "_").replace(".", "_").replace("-", "_")[:50]
             sw_cves = surreal_query(db, f"""
                 SELECT ->has_cve->cve.cve_id AS ids,
@@ -218,41 +234,49 @@ def build_attack_graph(db, hostname=None) -> nx.DiGraph:
                 cvss = scores[i] if i < len(scores) else None
                 is_kev = kevs[i] if i < len(kevs) else False
                 desc = (descs[i] if i < len(descs) else "") or ""
-                desc = str(desc)[:250]
+                desc = str(desc)[:200]
 
                 cve_node = f"cve:{cve_id}"
+                color = _cve_color(cvss, is_kev)
                 if cve_node not in G.nodes:
-                    kev_marker = " ⚠️ ACTIVELY EXPLOITED" if is_kev else ""
+                    kev_marker = "⚠️ ACTIVELY EXPLOITED" if is_kev else ""
                     cvss_label = f"{cvss}" if isinstance(cvss, (int, float)) else "N/A"
                     sev = "CRITICAL" if cvss and cvss >= 9 else "HIGH" if cvss and cvss >= 7 else "MEDIUM" if cvss and cvss >= 4 else "LOW"
 
                     G.add_node(cve_node,
-                        label=f"🔓 {cve_id}\nCVSS {cvss_label}",
+                        label=f"🔓 {cve_id}\n{cvss_label}",
                         group="cve",
                         shape=SHAPES["cve"],
-                        color=_cve_color(cvss, is_kev),
+                        color={"background": color, "border": color},
                         size=_cve_size(cvss),
-                        font={"color": "white", "size": 9, "face": "JetBrains Mono, monospace"},
-                        title=f"""<div style='font-family:sans-serif;max-width:350px;'>
-                            <h3 style='color:{_cve_color(cvss, is_kev)};margin:0'>🔓 {cve_id}</h3>
-                            <span style='background:{"#7f1d1d" if is_kev else "#1e293b"};color:{"#ef4444" if is_kev else _cve_color(cvss)};
-                                padding:2px 8px;border-radius:12px;font-size:12px;font-weight:bold;'>
-                                CVSS {cvss_label} — {sev}{kev_marker}
-                            </span>
-                            <hr style='border-color:#334155'/>
-                            <p style='font-size:12px;color:#94a3b8;'>{desc}</p>
-                            <p style='font-size:11px;'><a href='https://nvd.nist.gov/vuln/detail/{cve_id}' target='_blank' style='color:#38bdf8;'>View on NVD →</a></p>
+                        font={**FONT, "size": 9, "color": color},
+                        title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:350px;background:#0A0A0F;
+                            border:1px solid {color};padding:12px;'>
+                            <div style='color:{color};font-size:14px;text-shadow:0 0 15px {color};'>🔓 {cve_id}</div>
+                            <div style='margin:4px 0;'>
+                                <span style='background:{"rgba(255,0,85,0.2)" if is_kev else "rgba(0,255,65,0.1)"};
+                                    color:{color};border:1px solid {color};padding:2px 8px;font-size:11px;
+                                    text-shadow:0 0 5px {color};'>
+                                    CVSS {cvss_label} — {sev} {kev_marker}
+                                </span>
+                            </div>
+                            <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,{color},transparent);'></div>
+                            <div style='color:#7FB87F;font-size:10px;line-height:1.5;'>{desc}</div>
+                            <div style='margin-top:6px;'>
+                                <a href='https://nvd.nist.gov/vuln/detail/{cve_id}' target='_blank'
+                                    style='color:#00FFFF;font-size:10px;text-shadow:0 0 5px #00FFFF;'>NVD →</a>
+                            </div>
                         </div>""",
-                        borderWidth=3 if is_kev else 1,
+                        borderWidth=4 if is_kev else 2,
+                        shadow={"enabled": True, "color": color, "size": 12 if is_kev else 5},
                     )
 
-                # Edge: software → CVE
-                edge_color = "#ef4444" if is_kev else ("#f97316" if cvss and cvss >= 7 else "#64748b")
+                edge_color = "#FF0055" if is_kev else ("#FF3333" if cvss and cvss >= 9 else "#FF6B00" if cvss and cvss >= 7 else "rgba(0,255,65,0.3)")
                 G.add_edge(sw_node, cve_node,
-                    color={"color": edge_color, "opacity": 0.8},
-                    width=3 if is_kev else (2 if cvss and cvss >= 7 else 1),
+                    color={"color": edge_color, "highlight": "#FFFFFF"},
+                    width=4 if is_kev else (3 if cvss and cvss >= 7 else 1),
                     arrows="to",
-                    title=f"has CVE — CVSS {cvss or 'N/A'}" + (" ⚠️ KEV" if is_kev else ""),
+                    title=f"CVE — CVSS {cvss or 'N/A'}" + (" ⚠️ KEV" if is_kev else ""),
                     smooth={"type": "curvedCW", "roundness": 0.15})
 
     return G
@@ -260,7 +284,6 @@ def build_attack_graph(db, hostname=None) -> nx.DiGraph:
 
 def add_threat_layer(G, db):
     """Add threat groups and techniques connected to the software in the graph."""
-    # Get all software names from the graph
     sw_in_graph = set()
     for n in G.nodes:
         if n.startswith("sw:"):
@@ -271,7 +294,6 @@ def add_threat_layer(G, db):
     if not sw_in_graph:
         return G
 
-    # Get threat groups that use software matching ours
     groups = surreal_query(db, """
         SELECT name, external_id, aliases, description,
             ->uses->software.name AS sw_used,
@@ -282,9 +304,6 @@ def add_threat_layer(G, db):
         WHERE count(->uses->technique) > 0
         LIMIT 15;
     """)
-
-    added_groups = 0
-    added_techniques = 0
 
     for g in groups:
         gname = g.get("name", "")
@@ -298,32 +317,34 @@ def add_threat_layer(G, db):
         if not tech_ids:
             continue
 
-        # Group node
         g_node = f"group:{gname}"
         alias_str = ", ".join(aliases[:4]) if isinstance(aliases, list) else ""
-        desc = (g.get("description", "") or "")[:300]
+        desc = (g.get("description", "") or "")[:250]
 
         if g_node not in G.nodes:
             G.add_node(g_node,
                 label=f"👤 {gname}\n({geid})",
                 group="threat_group",
                 shape=SHAPES["threat_group"],
-                color=COLORS["threat_group"],
+                color={"background": COLORS["threat_group"], "border": COLORS["threat_group"]},
                 size=35,
-                font={"color": "white", "size": 12, "face": "Inter, sans-serif", "bold": True},
-                title=f"""<div style='font-family:sans-serif;max-width:350px;'>
-                    <h3 style='color:#c084fc;margin:0'>👤 {gname}</h3>
-                    <span style='color:#94a3b8;font-size:12px;'>{geid}</span>
-                    {f"<br/><span style='color:#64748b;font-size:11px;'>aka {alias_str}</span>" if alias_str else ""}
-                    <hr style='border-color:#334155'/>
-                    <p style='font-size:12px;color:#94a3b8;'>{desc}</p>
-                    <p style='font-size:11px;'><b>Techniques:</b> {len(tech_ids)}</p>
-                    <p style='font-size:11px;'><a href='https://attack.mitre.org/groups/{geid}/' target='_blank' style='color:#38bdf8;'>View on MITRE →</a></p>
+                font={**FONT, "size": 12, "bold": True, "color": "#FF00FF"},
+                title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:350px;background:#0A0A0F;
+                    border:1px solid #FF00FF;padding:12px;'>
+                    <div style='color:#FF00FF;font-size:14px;text-shadow:0 0 15px #FF00FF;'>👤 {gname}</div>
+                    <div style='color:#7FB87F;font-size:10px;'>{geid}</div>
+                    {f"<div style='color:#3D6B3D;font-size:9px;'>AKA: {alias_str}</div>" if alias_str else ""}
+                    <div style='margin:6px 0;height:1px;background:linear-gradient(90deg,transparent,#FF00FF,transparent);'></div>
+                    <div style='color:#7FB87F;font-size:10px;line-height:1.5;'>{desc}</div>
+                    <div style='color:#FFB800;font-size:10px;margin-top:4px;'>TECHNIQUES: {len(tech_ids)}</div>
+                    <div style='margin-top:4px;'>
+                        <a href='https://attack.mitre.org/groups/{geid}/' target='_blank'
+                            style='color:#00FFFF;font-size:10px;text-shadow:0 0 5px #00FFFF;'>MITRE →</a>
+                    </div>
                 </div>""",
+                shadow={"enabled": True, "color": "#FF00FF", "size": 10},
             )
-            added_groups += 1
 
-        # Add top techniques per group (limit 8 per group)
         for i, (tid, tname) in enumerate(zip(tech_ids[:8], tech_names[:8])):
             if not tid:
                 continue
@@ -333,137 +354,160 @@ def add_threat_layer(G, db):
 
             if t_node not in G.nodes:
                 G.add_node(t_node,
-                    label=f"⚔️ {tid}\n{str(tname or '')[:30]}",
+                    label=f"⚔️ {tid}\n{str(tname or '')[:25]}",
                     group="technique",
                     shape=SHAPES["technique"],
-                    color=COLORS["technique"],
+                    color={"background": COLORS["technique"], "border": COLORS["technique"]},
                     size=18,
-                    font={"color": "white", "size": 9, "face": "Inter, sans-serif"},
-                    title=f"""<div style='font-family:sans-serif;max-width:300px;'>
-                        <h3 style='color:#38bdf8;margin:0'>⚔️ {tname}</h3>
-                        <span style='color:#94a3b8;'>{tid}</span>
-                        <hr style='border-color:#334155'/>
-                        <p style='font-size:12px;color:#94a3b8;'>{tdesc}</p>
-                        <p style='font-size:11px;'><a href='https://attack.mitre.org/techniques/{str(tid).replace(".","/")}'
-                            target='_blank' style='color:#38bdf8;'>View on MITRE →</a></p>
+                    font={**FONT, "size": 9, "color": "#0080FF"},
+                    title=f"""<div style='font-family:Share Tech Mono,monospace;max-width:300px;background:#0A0A0F;
+                        border:1px solid #0080FF;padding:10px;'>
+                        <div style='color:#0080FF;text-shadow:0 0 10px #0080FF;'>⚔️ {tname}</div>
+                        <div style='color:#7FB87F;font-size:10px;'>{tid}</div>
+                        <div style='margin:4px 0;height:1px;background:linear-gradient(90deg,transparent,#0080FF,transparent);'></div>
+                        <div style='color:#7FB87F;font-size:10px;'>{tdesc}</div>
                     </div>""",
+                    shadow={"enabled": True, "color": "#0080FF", "size": 5},
                 )
-                added_techniques += 1
 
             G.add_edge(g_node, t_node,
-                color={"color": "#c084fc", "opacity": 0.5},
-                width=1, arrows="to", title=f"uses {tid}",
+                color={"color": "rgba(255,0,255,0.4)", "highlight": "#FF00FF"},
+                width=1, arrows="to", title=f"USES {tid}",
                 smooth={"type": "curvedCW", "roundness": 0.2})
 
     return G
 
 
-def _build_legend_html():
-    """Build an HTML legend overlay."""
+def _build_matrix_legend():
+    """Build Matrix-style legend overlay."""
     return """
     <div id="graph-legend" style="
         position: absolute; bottom: 16px; left: 16px; z-index: 999;
-        background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(12px);
-        border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 14px;
-        padding: 14px 18px; font-family: 'Inter', sans-serif; color: #e2e8f0;
-        font-size: 12px; max-width: 220px; line-height: 1.6;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        background: rgba(10, 10, 15, 0.95); border: 1px solid rgba(0,255,65,0.3);
+        padding: 16px 20px; font-family: 'Share Tech Mono', monospace; color: #00FF41;
+        font-size: 11px; max-width: 240px; line-height: 1.8;
+        box-shadow: 0 0 20px rgba(0,255,65,0.1);
     ">
-        <div style="font-weight:700;margin-bottom:8px;font-size:13px;color:#f1f5f9;">📊 Legend</div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <div style="width:14px;height:14px;background:#ef4444;border-radius:3px;"></div> Asset (Critical)
+        <div style="font-size:12px;color:#00FF41;text-shadow:0 0 10px rgba(0,255,65,0.5);
+            letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">⬡ LEGEND</div>
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <div style="width:14px;height:14px;background:#FF3333;box-shadow:0 0 8px #FF3333;"></div>
+            <span style="color:#E0FFE0;">🌐 Asset (Internet-Facing)</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <div style="width:14px;height:14px;background:#f97316;border-radius:3px;"></div> Asset (High)
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <div style="width:14px;height:14px;background:#00FF41;box-shadow:0 0 8px #00FF41;"></div>
+            <span style="color:#E0FFE0;">🔒 Asset (Internal)</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <div style="width:14px;height:14px;background:#818cf8;border-radius:3px;transform:rotate(45deg);"></div> Software Version
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <div style="width:14px;height:14px;background:#00FFFF;box-shadow:0 0 8px #00FFFF;transform:rotate(45deg);"></div>
+            <span style="color:#E0FFE0;">📦 Software Version</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #ff3333;"></div> CVE (Critical)
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;
+                border-bottom:14px solid #FF3333;filter:drop-shadow(0 0 4px #FF3333);"></div>
+            <span style="color:#E0FFE0;">🔓 CVE (Critical)</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #ff8833;"></div> CVE (High)
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;
+                border-bottom:14px solid #FF0055;filter:drop-shadow(0 0 6px #FF0055);"></div>
+            <span style="color:#E0FFE0;">⚠️ CVE (KEV — Active)</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #ff0055;"></div> CVE (KEV ⚠️)
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <svg width="14" height="14"><polygon points="7,0 14,5 11,14 3,14 0,5" fill="#FF00FF"
+                style="filter:drop-shadow(0 0 4px #FF00FF);"/></svg>
+            <span style="color:#E0FFE0;">👤 Threat Group</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <svg width="14" height="14"><polygon points="7,0 14,5 11,14 3,14 0,5" fill="#c084fc"/></svg> Threat Group
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <div style="width:14px;height:14px;background:#0080FF;border-radius:50%;box-shadow:0 0 6px #0080FF;"></div>
+            <span style="color:#E0FFE0;">⚔️ ATT&CK Technique</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin:3px 0;">
-            <div style="width:14px;height:14px;background:#38bdf8;border-radius:50%;"></div> Technique
-        </div>
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);color:#64748b;font-size:10px;">
-            Drag to rearrange · Scroll to zoom · Hover for details
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,255,65,0.15);color:#3D6B3D;font-size:9px;letter-spacing:1px;">
+            DRAG · ZOOM · HOVER FOR INTEL
         </div>
     </div>
     """
 
 
-def _build_stats_html(G):
-    """Build graph statistics overlay."""
+def _build_matrix_stats(G):
+    """Build Matrix-style stats overlay."""
     groups = {"asset": 0, "software": 0, "cve": 0, "technique": 0, "threat_group": 0}
     kev_count = 0
-    max_cvss = 0
+    internet_facing = 0
     for _, data in G.nodes(data=True):
         g = data.get("group", "")
         if g in groups:
             groups[g] += 1
-        if g == "cve" and data.get("is_kev"):
-            kev_count += 1
+        if data.get("is_internet_facing"):
+            internet_facing += 1
 
     return f"""
     <div id="graph-stats" style="
         position: absolute; top: 16px; right: 16px; z-index: 999;
-        background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(12px);
-        border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 14px;
-        padding: 14px 18px; font-family: 'Inter', sans-serif; color: #e2e8f0;
-        font-size: 12px; line-height: 1.6;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        background: rgba(10, 10, 15, 0.95); border: 1px solid rgba(0,255,65,0.3);
+        padding: 16px 20px; font-family: 'Share Tech Mono', monospace; color: #00FF41;
+        font-size: 11px; line-height: 1.8;
+        box-shadow: 0 0 20px rgba(0,255,65,0.1);
     ">
-        <div style="font-weight:700;margin-bottom:6px;font-size:13px;color:#f1f5f9;">📈 Graph Stats</div>
-        <div><span style="color:#94a3b8;">Nodes:</span> <b>{G.number_of_nodes()}</b></div>
-        <div><span style="color:#94a3b8;">Edges:</span> <b>{G.number_of_edges()}</b></div>
-        <div style="margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,0.08);">
-            <span style="color:#ef4444;">🖥️</span> {groups['asset']} assets · 
-            <span style="color:#818cf8;">📦</span> {groups['software']} sw · 
-            <span style="color:#ff3333;">🔓</span> {groups['cve']} CVEs
-        </div>
-        {"<div style='color:#c084fc;'> 👤 " + str(groups['threat_group']) + " groups · ⚔️ " + str(groups['technique']) + " techniques</div>"
+        <div style="font-size:12px;text-shadow:0 0 10px rgba(0,255,65,0.5);
+            letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">⬡ THREAT MATRIX</div>
+        <div><span style="color:#3D6B3D;">NODES:</span> <span style="text-shadow:0 0 8px #00FF41;font-size:14px;">{G.number_of_nodes()}</span></div>
+        <div><span style="color:#3D6B3D;">EDGES:</span> <span style="text-shadow:0 0 8px #00FF41;font-size:14px;">{G.number_of_edges()}</span></div>
+        <div style="margin:4px 0;height:1px;background:linear-gradient(90deg,transparent,rgba(0,255,65,0.3),transparent);"></div>
+        <div><span style="color:#FF3333;text-shadow:0 0 5px #FF3333;">🌐</span> {internet_facing} INTERNET-FACING</div>
+        <div><span style="color:#FF3333;">🔓</span> {groups['cve']} CVEs MAPPED</div>
+        <div><span style="color:#00FFFF;">📦</span> {groups['software']} SOFTWARE</div>
+        {"<div><span style='color:#FF00FF;'>👤</span> " + str(groups['threat_group']) + " THREAT GROUPS</div>"
          if groups['threat_group'] > 0 else ""}
+        {"<div><span style='color:#0080FF;'>⚔️</span> " + str(groups['technique']) + " TECHNIQUES</div>"
+         if groups['technique'] > 0 else ""}
+    </div>
+    """
+
+
+def _build_matrix_title():
+    """Build the Matrix-style title overlay."""
+    return """
+    <div id="graph-title" style="
+        position: absolute; top: 16px; left: 16px; z-index: 999;
+        font-family: 'Share Tech Mono', monospace;
+    ">
+        <div style="font-size: 18px; color: #00FF41; text-shadow: 0 0 20px rgba(0,255,65,0.6);
+            letter-spacing: 4px; text-transform: uppercase;">ATTACK SURFACE MAP</div>
+        <div style="font-size: 10px; color: #3D6B3D; letter-spacing: 2px; margin-top: 2px;">
+            THREATGRAPH // REAL-TIME THREAT VISUALIZATION
+        </div>
     </div>
     """
 
 
 def render_graph_html(G: nx.DiGraph, height="700px") -> str:
-    """Render to interactive HTML with overlays."""
-    net = Network(height=height, width="100%", directed=True, bgcolor="#0b0f19",
-                  font_color="white", notebook=False)
+    """Render to interactive HTML with Matrix-style overlays."""
+    net = Network(height=height, width="100%", directed=True, bgcolor="#000000",
+                  font_color="#00FF41", notebook=False)
 
     net.set_options(json.dumps({
         "physics": {
             "enabled": True,
             "barnesHut": {
-                "gravitationalConstant": -12000,
-                "centralGravity": 0.25,
-                "springLength": 180,
-                "springConstant": 0.03,
-                "damping": 0.12,
-                "avoidOverlap": 0.6,
+                "gravitationalConstant": -15000,
+                "centralGravity": 0.2,
+                "springLength": 200,
+                "springConstant": 0.025,
+                "damping": 0.1,
+                "avoidOverlap": 0.7,
             },
             "stabilization": {
                 "enabled": True,
-                "iterations": 300,
-                "updateInterval": 25,
+                "iterations": 400,
+                "updateInterval": 20,
             },
         },
         "interaction": {
             "hover": True,
-            "tooltipDelay": 100,
+            "tooltipDelay": 80,
             "zoomView": True,
             "dragView": True,
-            "zoomSpeed": 0.6,
+            "zoomSpeed": 0.5,
             "navigationButtons": True,
             "keyboard": True,
         },
@@ -473,7 +517,7 @@ def render_graph_html(G: nx.DiGraph, height="700px") -> str:
         },
         "nodes": {
             "borderWidth": 2,
-            "shadow": {"enabled": True, "size": 8, "color": "rgba(0,0,0,0.3)"},
+            "shadow": {"enabled": True, "size": 10, "color": "rgba(0,255,65,0.3)"},
         },
     }))
 
@@ -482,49 +526,125 @@ def render_graph_html(G: nx.DiGraph, height="700px") -> str:
             node_id,
             label=data.get("label", node_id),
             title=data.get("title", ""),
-            color=data.get("color", "#64748b"),
+            color=data.get("color", "#00FF41"),
             shape=data.get("shape", "dot"),
             size=data.get("size", 15),
-            font=data.get("font", {"color": "white"}),
+            font=data.get("font", FONT),
             borderWidth=data.get("borderWidth", 2),
             borderWidthSelected=data.get("borderWidthSelected", 4),
+            shadow=data.get("shadow", {"enabled": True}),
         )
 
     for src, dst, data in G.edges(data=True):
         net.add_edge(
             src, dst,
-            color=data.get("color", "#64748b"),
+            color=data.get("color", "rgba(0,255,65,0.3)"),
             title=data.get("title", ""),
             width=data.get("width", 1),
             arrows=data.get("arrows", "to"),
             smooth=data.get("smooth", {"type": "continuous"}),
         )
 
-    # Save and inject overlays
     tmpfile = tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False)
     net.save_graph(tmpfile.name)
     with open(tmpfile.name, "r") as f:
         html = f.read()
     os.unlink(tmpfile.name)
 
-    # Inject legend and stats before closing body
-    legend = _build_legend_html()
-    stats = _build_stats_html(G)
+    # Inject Matrix rain, overlays, and styles
+    legend = _build_matrix_legend()
+    stats = _build_matrix_stats(G)
+    title = _build_matrix_title()
+
+    matrix_rain_js = """
+    <canvas id="matrix-rain" style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;pointer-events:none;"></canvas>
+    <script>
+    (function() {
+        const canvas = document.getElementById('matrix-rain');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        const chars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEF';
+        const fontSize = 12;
+        const columns = Math.floor(canvas.width / fontSize);
+        const drops = Array(columns).fill(1);
+        
+        function draw() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#00FF4120';
+            ctx.font = fontSize + 'px monospace';
+            
+            for(let i = 0; i < drops.length; i++) {
+                const text = chars[Math.floor(Math.random() * chars.length)];
+                ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+                
+                if(drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                    drops[i] = 0;
+                }
+                drops[i]++;
+            }
+        }
+        setInterval(draw, 50);
+        
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+    })();
+    </script>
+    """
+
+    matrix_css = """
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Fira+Code:wght@300;400;500&display=swap');
+        body {
+            margin: 0; overflow: hidden;
+            background: #000000;
+            font-family: 'Share Tech Mono', monospace;
+        }
+        #mynetwork {
+            border: 1px solid rgba(0,255,65,0.2) !important;
+            box-shadow: 0 0 30px rgba(0,255,65,0.05), inset 0 0 30px rgba(0,255,65,0.02);
+        }
+        .vis-navigation .vis-button {
+            border-radius: 0 !important;
+            background: rgba(10,10,15,0.9) !important;
+            border: 1px solid rgba(0,255,65,0.3) !important;
+        }
+        .vis-navigation .vis-button:hover {
+            box-shadow: 0 0 10px rgba(0,255,65,0.3) !important;
+        }
+        /* Pulsing glow on the network container */
+        #mynetwork::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border: 1px solid rgba(0,255,65,0.1);
+            animation: borderPulse 3s ease-in-out infinite;
+            pointer-events: none;
+        }
+        @keyframes borderPulse {
+            0%, 100% { box-shadow: 0 0 5px rgba(0,255,65,0.1); }
+            50% { box-shadow: 0 0 20px rgba(0,255,65,0.2); }
+        }
+    </style>
+    """
+
     html = html.replace("</body>", f"""
+        {matrix_rain_js}
         {legend}
         {stats}
-        <style>
-            body {{ margin: 0; overflow: hidden; }}
-            #mynetwork {{ border: 1px solid rgba(99, 102, 241, 0.15); border-radius: 12px; }}
-            .vis-navigation .vis-button {{ border-radius: 8px !important; }}
-        </style>
+        {title}
+        {matrix_css}
     </body>""")
 
     return html
 
 
 def generate_attack_path_viz(hostname=None, include_groups=False) -> str:
-    """Main entry point — generate interactive graph HTML."""
+    """Main entry point — generate interactive Matrix-style graph HTML."""
     db = get_db()
     G = build_attack_graph(db, hostname)
     if include_groups:
