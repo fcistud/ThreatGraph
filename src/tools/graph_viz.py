@@ -92,6 +92,35 @@ def _risk_score(cvss, criticality_score, zone, control_effectiveness=0):
     return round(raw * 100, 1)  # 0-100 scale
 
 
+def _planner_edge_weight(source_group, target_group, source_data, target_data, edge_data):
+    """Return a positive traversal weight for exploit-state path search."""
+    if source_group == "threat_vector" and target_group == "asset":
+        severity = float(source_data.get("severity", 5) or 5)
+        control_penalty = float(target_data.get("control_count", 0) or 0) * 0.3
+        return max(1.0, 12.0 - severity + control_penalty)
+    if source_group == "asset" and target_group == "software":
+        return 1.0
+    if source_group == "software" and target_group == "cve":
+        label = str(target_data.get("label", ""))
+        score = None
+        parts = label.split("\n")
+        if len(parts) > 1:
+            try:
+                score = float(parts[1])
+            except Exception:
+                score = None
+        return max(0.5, 11.0 - float(score or 5.0))
+    if source_group == "asset" and target_group == "asset":
+        target_exposure = float(target_data.get("exposure_score", 0) or 0)
+        control_penalty = float(target_data.get("control_count", 0) or 0) * 0.4
+        return max(1.0, 6.0 - min(target_exposure / 1000.0, 4.0) + control_penalty)
+    if source_group == "cve" and target_group == "asset":
+        return 0.5
+    if source_group == "internet" and target_group == "asset":
+        return 1.0
+    return 1.0
+
+
 # ─── GRAPH BUILDERS ───────────────────────────────────
 
 def build_enterprise_graph(db, hostname=None, show_controls=True, show_threats=True, bundles=None) -> nx.DiGraph:
@@ -516,59 +545,162 @@ def add_threat_layer(G, bundles):
 
 
 def find_attack_paths(G) -> list[dict]:
-    """Find evidence-weighted attack paths from internet-facing assets to crown jewels."""
-    # Identify entry points (internet-facing assets)
-    entry_points = [n for n, d in G.nodes(data=True)
-                    if d.get("group") == "asset" and d.get("is_internet_facing")
-                    and (d.get("cve_count", 0) > 0 or d.get("threat_vector_count", 0) > 0)]
-    # Identify crown jewels
-    crown_jewels = [n for n, d in G.nodes(data=True)
-                    if d.get("group") == "asset" and d.get("is_crown_jewel")]
-
-    if not entry_points or not crown_jewels:
+    """Find exploit-sequence paths across threat vectors, software, CVEs, and lateral movement."""
+    crown_jewels = [n for n, d in G.nodes(data=True) if d.get("group") == "asset" and d.get("is_crown_jewel")]
+    if not crown_jewels:
         return []
 
-    # Build undirected view for path finding (only asset→asset edges)
-    asset_graph = nx.Graph()
-    for n, d in G.nodes(data=True):
-        if d.get("group") == "asset":
-            asset_graph.add_node(n, **d)
-    for u, v, d in G.edges(data=True):
-        if u.startswith("asset:") and v.startswith("asset:"):
-            asset_graph.add_edge(u, v, **d)
+    planner = nx.DiGraph()
+    for node_id, data in G.nodes(data=True):
+        if data.get("group") in {"asset", "software", "cve", "threat_vector"}:
+            planner.add_node(node_id, **data)
+        if data.get("group") == "asset":
+            planner.add_node(
+                f"comp:{node_id}",
+                group="compromised_asset",
+                label=f"☠️ {data.get('label', node_id)} compromised",
+                exposure_score=data.get("exposure_score", 0),
+                criticality_score=data.get("criticality_score", 5),
+                top_groups=data.get("top_groups", []),
+            )
 
+    for source, target, edge_data in G.edges(data=True):
+        if source not in planner.nodes or target not in planner.nodes:
+            continue
+        source_group = planner.nodes[source].get("group")
+        target_group = planner.nodes[target].get("group")
+        if (source_group, target_group) not in {
+            ("threat_vector", "asset"),
+            ("asset", "software"),
+            ("software", "cve"),
+        }:
+            continue
+        planner.add_edge(
+            source,
+            target,
+            weight=_planner_edge_weight(
+                source_group, target_group, planner.nodes[source], planner.nodes[target], edge_data
+            ),
+        )
+
+    # Add compromise transitions so a CVE on an asset becomes a pivot point to the next hop.
+    for asset_node, asset_data in G.nodes(data=True):
+        if asset_data.get("group") != "asset":
+            continue
+        comp_node = f"comp:{asset_node}"
+        software_nodes = [target for _, target in G.out_edges(asset_node) if G.nodes[target].get("group") == "software"]
+        for software_node in software_nodes:
+            cve_nodes = [target for _, target in G.out_edges(software_node) if G.nodes[target].get("group") == "cve"]
+            for cve_node in cve_nodes:
+                planner.add_edge(
+                    cve_node,
+                    comp_node,
+                    weight=_planner_edge_weight(
+                        "cve", "asset", planner.nodes[cve_node], planner.nodes[asset_node], {}
+                    ),
+                )
+
+        # Threat vectors such as phishing or brute force can directly compromise the asset.
+        for threat_node in [source for source, _ in G.in_edges(asset_node) if G.nodes[source].get("group") == "threat_vector"]:
+            planner.add_edge(
+                threat_node,
+                comp_node,
+                weight=_planner_edge_weight(
+                    "threat_vector", "asset", planner.nodes[threat_node], planner.nodes[asset_node], {}
+                ),
+            )
+
+        # Lateral movement only happens from a compromised asset to the next asset's exposed surface.
+        for _, connected_asset in G.out_edges(asset_node):
+            if G.nodes[connected_asset].get("group") != "asset":
+                continue
+            planner.add_edge(
+                comp_node,
+                connected_asset,
+                weight=_planner_edge_weight(
+                    "asset", "asset", planner.nodes[asset_node], planner.nodes[connected_asset], {}
+                ),
+            )
+
+    planner.add_node("internet", group="internet", label="🌐 Internet")
+    for node_id, data in G.nodes(data=True):
+        if data.get("group") == "asset" and data.get("is_internet_facing"):
+            planner.add_edge(
+                "internet",
+                node_id,
+                weight=_planner_edge_weight("internet", "asset", {"group": "internet"}, data, {}),
+            )
+
+    start_nodes = ["internet"] + [
+        node_id for node_id, data in planner.nodes(data=True) if data.get("group") == "threat_vector"
+    ]
     paths = []
-    for entry in entry_points:
+
+    for start in start_nodes:
         for crown in crown_jewels:
+            goal = f"comp:{crown}"
             try:
-                path = nx.shortest_path(asset_graph, entry, crown)
-                if len(path) > 1:
-                    node_scores = [G.nodes[node].get("exposure_score", 0) for node in path]
-                    cve_bonus = sum(len(G.nodes[node].get("top_cves", [])) * 25 for node in path)
-                    threat_bonus = sum(G.nodes[node].get("threat_vector_count", 0) * 20 for node in path)
-                    crown_bonus = G.nodes[crown].get("criticality_score", 5) * 25
-                    risk_score = round(sum(node_scores) + cve_bonus + threat_bonus + crown_bonus, 1)
-                    top_cves = []
-                    top_groups = []
-                    for node in path:
-                        top_cves.extend(G.nodes[node].get("top_cves", []))
-                        top_groups.extend(G.nodes[node].get("top_groups", []))
-                    paths.append(
-                        {
-                            "nodes": path,
-                            "risk": risk_score,
-                            "entry": G.nodes[entry].get("label", entry),
-                            "crown": G.nodes[crown].get("label", crown),
-                            "top_cves": list(dict.fromkeys(top_cves))[:5],
-                            "top_groups": list(dict.fromkeys(top_groups))[:5],
-                        }
-                    )
+                path = nx.shortest_path(planner, start, goal, weight="weight")
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 continue
 
-    # Sort by risk (highest first)
-    paths.sort(key=lambda item: item["risk"], reverse=True)
-    return paths
+            if len(path) < 2:
+                continue
+
+            asset_nodes = [
+                node for node in path if planner.nodes[node].get("group") in {"asset", "compromised_asset"}
+            ]
+            cve_nodes = [node for node in path if planner.nodes[node].get("group") == "cve"]
+            threat_nodes = [node for node in path if planner.nodes[node].get("group") == "threat_vector"]
+
+            asset_risk = sum(float(planner.nodes[node].get("exposure_score", 0) or 0) for node in asset_nodes)
+            crown_bonus = float(planner.nodes[goal].get("criticality_score", 5) or 5) * 25
+            threat_bonus = sum(
+                float(planner.nodes[node].get("severity", 5) or 5) * 10 for node in threat_nodes
+            )
+            cve_bonus = len(cve_nodes) * 25
+            risk_score = round(asset_risk + crown_bonus + threat_bonus + cve_bonus, 1)
+
+            top_cves = list(
+                dict.fromkeys(
+                    node.replace("cve:", "")
+                    for node in cve_nodes
+                    if node.startswith("cve:")
+                )
+            )[:5]
+            top_groups = []
+            for asset_node in asset_nodes:
+                top_groups.extend(planner.nodes[asset_node].get("top_groups", []))
+            top_groups = list(dict.fromkeys(top_groups))[:5]
+
+            step_labels = []
+            for node in path:
+                if node == "internet":
+                    step_labels.append("🌐 internet")
+                else:
+                    step_labels.append(planner.nodes[node].get("label", node))
+
+            paths.append(
+                {
+                    "nodes": path,
+                    "risk": risk_score,
+                    "entry": step_labels[0],
+                    "crown": planner.nodes[goal].get("label", goal),
+                    "top_cves": top_cves,
+                    "top_groups": top_groups,
+                    "steps": step_labels,
+                }
+            )
+
+    deduped = []
+    seen = set()
+    for path in sorted(paths, key=lambda item: item["risk"], reverse=True):
+        key = tuple(path["nodes"])
+        if key in seen:
+            continue
+        deduped.append(path)
+        seen.add(key)
+    return deduped
 
 
 def highlight_attack_paths(G, paths):
