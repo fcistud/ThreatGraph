@@ -957,7 +957,7 @@ with tab4:
         asset_list = surreal_query(db_tmp, "SELECT hostname FROM asset ORDER BY hostname;")
         asset_names = [a.get("hostname", "") for a in asset_list if a.get("hostname")]
     except Exception:
-        asset_names = ["web-server-01", "db-server-01", "api-server-01", "mail-server-01", "dev-workstation-01"]
+        asset_names = []
 
     asset_choice = st.selectbox("Select asset to investigate:", asset_names, key="asset_deep_dive")
 
@@ -1500,47 +1500,66 @@ with tab8:
     <div class="glass-card">
         <h3>Risk Severity Levels</h3>
         <p>
-            <span class="risk-badge risk-critical">🔴 CRITICAL (>100)</span>
-            Multiple high-severity CVEs on a critical asset, potentially with active exploitation. <strong>Patch immediately.</strong><br/><br/>
-            <span class="risk-badge risk-high">🟠 HIGH (51-100)</span>
-            Significant exposure requiring urgent attention. May include CVEs with CVSS >7.0.<br/><br/>
-            <span class="risk-badge risk-medium">🟡 MEDIUM (26-50)</span> 
-            Moderate risk. CVEs exist but may be lower severity or on less critical assets.<br/><br/>
-            <span class="risk-badge risk-low">🟢 LOW (<25)</span>
-            Minimal exposure. Keep monitoring but no immediate action needed.
+            <span class="risk-badge risk-critical">🔴 CRITICAL</span>
+            Highest-priority assets in the current environment. Usually combines severe CVEs, weak network position, and high business impact.<br/><br/>
+            <span class="risk-badge risk-high">🟠 HIGH</span>
+            Material exposure that should be queued quickly for patching or containment.<br/><br/>
+            <span class="risk-badge risk-medium">🟡 MEDIUM</span> 
+            Real exposure, but not currently the most urgent compared with the rest of the environment.<br/><br/>
+            <span class="risk-badge risk-low">🟢 LOW</span>
+            Lower relative risk right now. Monitor and remediate on the normal cycle.
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("### 🏢 Sample Assets")
+    st.markdown("### 🏢 Seeded Asset Snapshot")
 
     st.markdown("""
     <div class="info-callout">
-        <strong>Note:</strong> This demo uses 5 intentionally vulnerable servers to showcase the system. 
-        In production, you'd connect to real asset management tools (ServiceNow, Qualys, CrowdStrike, etc.).
+        <strong>Note:</strong> This demo uses the current seeded enterprise environment from the graph. 
+        The table below is generated from live asset and software records, not a static mockup.
     </div>
     """, unsafe_allow_html=True)
 
-    assets_data = [
-        {"Asset": "web-server-01", "Software": "Apache 2.4.49, OpenSSL 1.1.1k, PHP 8.0.10", "Zone": "DMZ", "Criticality": "Critical", "Why Vulnerable": "Apache 2.4.49 has a path traversal CVE"},
-        {"Asset": "db-server-01", "Software": "PostgreSQL 13.2, OpenSSH 8.2p1", "Zone": "Internal", "Criticality": "Critical", "Why Vulnerable": "Outdated PostgreSQL with known vulns"},
-        {"Asset": "api-server-01", "Software": "nginx 1.21.0, Node.js 16, Log4j 2.14.1", "Zone": "DMZ", "Criticality": "High", "Why Vulnerable": "Log4Shell (CVE-2021-44228) — CVSS 10.0!"},
-        {"Asset": "mail-server-01", "Software": "Exchange 2019 CU10, IIS 10.0", "Zone": "Internal", "Criticality": "High", "Why Vulnerable": "ProxyShell/ProxyLogon Exchange CVEs"},
-        {"Asset": "dev-workstation-01", "Software": "Docker Desktop 4.22.0, Python 3.11.4", "Zone": "Corporate", "Criticality": "Medium", "Why Vulnerable": "Container escape, supply chain risk"},
-    ]
-    st.dataframe(pd.DataFrame(assets_data), use_container_width=True, hide_index=True)
+    try:
+        db = get_db()
+        seeded_assets = surreal_query(db, """
+            SELECT hostname, network_zone, criticality,
+                ->runs->software_version.name AS sw_names,
+                ->runs->software_version.version AS sw_versions
+            FROM asset
+            ORDER BY hostname;
+        """)
+        rows = []
+        for row in seeded_assets:
+            sw_names = row.get("sw_names", []) or []
+            sw_versions = row.get("sw_versions", []) or []
+            software = []
+            for idx, name in enumerate(sw_names[:4]):
+                version = sw_versions[idx] if idx < len(sw_versions) else ""
+                software.append(f"{name} {version}".strip())
+            rows.append({
+                "Asset": row.get("hostname", ""),
+                "Software": ", ".join(software),
+                "Zone": str(row.get("network_zone", "")).upper(),
+                "Criticality": str(row.get("criticality", "")).title(),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.info(f"Live asset snapshot unavailable: {e}")
 
     st.markdown("### 🔧 Setup & Commands")
 
-    st.code("""# Start SurrealDB
-surreal start --user root --pass root --bind 0.0.0.0:8000 memory
+    st.code("""# Use embedded file-backed SurrealDB (no separate server needed)
+export SURREALDB_URL="file://$(pwd)/.context/app.db"
+export SURREALDB_NS="threatgraph"
+export SURREALDB_DB="main"
 
-# Run data ingestion (loads ATT&CK, CVEs, assets — takes ~30s)
+# Run data ingestion (loads ATT&CK, links software, correlates CVEs)
 python3 ingest.py
 
 # Launch dashboard
-streamlit run app.py
+streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 
-# Docker alternative (does everything)
-docker-compose up --build
+# Optional: if you prefer a standalone SurrealDB server, set SURREALDB_URL accordingly first
 """, language="bash")
