@@ -7,6 +7,9 @@
 ![SurrealDB](https://img.shields.io/badge/SurrealDB-✓-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+![](https://github.com/fcistud/ThreatGraph/blob/main/Gemini_Generated_Image_7whqxn7whqxn7whq.png)
+
+
 ## 🎯 What It Does
 
 ThreatGraph transforms static threat intelligence into a **queryable, multi-layer knowledge graph** mapped to a realistic enterprise network topology:
