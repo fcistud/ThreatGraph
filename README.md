@@ -9,7 +9,7 @@
 
 ![](https://github.com/fcistud/ThreatGraph/blob/main/Gemini_Generated_Image_7whqxn7whqxn7whq.png)
 
-[ThreatGraph Website](https://fcistud.github.io/ThreatGraph/)
+[ThreatGraph Landing Page](https://fcistud.github.io/ThreatGraph/)
 
 ## 🎯 What It Does
 
